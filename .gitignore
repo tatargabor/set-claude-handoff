@@ -1,0 +1,5 @@
+node_modules/
+*.log
+.DS_Store
+# Session scratch — /handoff writes here; never committed.
+.set/

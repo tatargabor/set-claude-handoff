@@ -1,0 +1,39 @@
+{
+  "name": "set-claude-handoff",
+  "version": "0.1.0",
+  "description": "Session handoff for Claude Code — write one thread's open work and measured state to an ID-tagged file, so /clear beats a compact.",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "skill",
+    "handoff",
+    "context",
+    "compact",
+    "agent"
+  ],
+  "license": "MIT",
+  "author": "Gábor Tatár",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tatargabor/set-claude-handoff.git"
+  },
+  "homepage": "https://github.com/tatargabor/set-claude-handoff#readme",
+  "bugs": "https://github.com/tatargabor/set-claude-handoff/issues",
+  "type": "module",
+  "bin": {
+    "set-claude-handoff": "bin/cli.mjs"
+  },
+  "files": [
+    "bin",
+    "skills",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

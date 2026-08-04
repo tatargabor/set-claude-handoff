@@ -1,0 +1,138 @@
+#!/usr/bin/env node
+/**
+ * set-claude-handoff — installer for the `/handoff` Claude Code skill.
+ *
+ * Two kinds of file, and the difference is the whole point of this CLI:
+ *   - package-owned: skills/handoff/SKILL.md  → overwritten on every init (that is the upgrade)
+ *   - project-owned: .claude/handoff.profile.md → written once, NEVER overwritten
+ * A skill upgrade that clobbers the project's probes would make upgrading unsafe, so nobody
+ * would upgrade.
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join, relative } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
+const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
+
+const USAGE = `set-claude-handoff ${VERSION}
+
+  set-claude-handoff init [--global]   install the /handoff skill into this project (or ~/.claude)
+  set-claude-handoff --version
+  set-claude-handoff help
+
+init writes:
+  .claude/skills/handoff/SKILL.md    the skill      (overwritten on re-run = upgrade)
+  .claude/handoff.profile.md         your probes    (created once, never overwritten)
+  .gitignore                         a .set/ entry, if the repo does not ignore it yet
+`
+
+function main(argv) {
+  const [cmd = "help", ...rest] = argv
+  switch (cmd) {
+    case "init":
+      return cmdInit({ global: rest.includes("--global"), cwd: process.cwd() })
+    case "--version":
+    case "-v":
+      console.log(VERSION)
+      return 0
+    case "help":
+    case "--help":
+    case "-h":
+      console.log(USAGE)
+      return 0
+    default:
+      console.error(`Unknown command: ${cmd}\n`)
+      console.log(USAGE)
+      return 1
+  }
+}
+
+export function cmdInit({ global = false, cwd = process.cwd(), log = console.log } = {}) {
+  const target = global ? join(homedir(), ".claude") : join(cwd, ".claude")
+  const skillDir = join(target, "skills", "handoff")
+
+  mkdirSync(skillDir, { recursive: true })
+  const skillPath = join(skillDir, "SKILL.md")
+  const existed = existsSync(skillPath)
+  writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "handoff", "SKILL.md"), "utf8"))
+  log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
+
+  if (global) {
+    // The profile describes ONE project's probes, so a user-wide install has nothing to put in
+    // it. Say so — otherwise the skill reports "no project profile" and the reason looks like a bug.
+    log(`\nGlobal install: no profile written (it is per project).`)
+    log(`Run \`set-claude-handoff init\` inside a repo to get .claude/handoff.profile.md.`)
+    return 0
+  }
+
+  const profilePath = join(target, "handoff.profile.md")
+  if (existsSync(profilePath)) {
+    log(`kept      ${rel(cwd, profilePath)}  (project-owned — not overwritten)`)
+  } else {
+    writeFileSync(profilePath, buildProfile(cwd))
+    log(`created   ${rel(cwd, profilePath)}  ← edit this: it is what makes the handoff measure`)
+  }
+
+  const ignore = ensureSetIgnored(cwd)
+  if (ignore === "added") log(`updated   .gitignore  (added .set/ — handoffs are never committed)`)
+  else if (ignore === "already") log(`ok        .gitignore already ignores .set/`)
+  else log(`note      no .gitignore found — make sure .set/ is not committed`)
+
+  log(`\nDone. In Claude Code:  /handoff   ·   /handoff <ID>   ·   /handoff list`)
+  return 0
+}
+
+function rel(cwd, p) {
+  const r = relative(cwd, p)
+  return r.startsWith("..") ? p : r
+}
+
+/**
+ * Fill the probe table with what can be PROVEN from the repo (package.json scripts), and leave
+ * the rest as placeholders. Detection is deliberately shallow: a guessed probe that measures the
+ * wrong thing is worse than a blank line, because it looks like someone already thought about it.
+ */
+function buildProfile(cwd) {
+  const template = readFileSync(join(PKG_ROOT, "templates", "handoff.profile.md"), "utf8")
+  const rows = []
+  const pkgPath = join(cwd, "package.json")
+  if (existsSync(pkgPath)) {
+    let scripts = {}
+    try {
+      scripts = JSON.parse(readFileSync(pkgPath, "utf8")).scripts ?? {}
+    } catch {
+      // A malformed package.json is the project's business, not ours — fall through with no rows.
+    }
+    const runner = existsSync(join(cwd, "pnpm-lock.yaml"))
+      ? "pnpm"
+      : existsSync(join(cwd, "yarn.lock"))
+        ? "yarn"
+        : "npm run"
+    for (const name of ["test", "build", "lint", "typecheck"]) {
+      if (scripts[name]) rows.push(`| \`${runner} ${name}\` | ${name} | exit 0 |  <!-- detected — verify -->`)
+    }
+  }
+  if (!rows.length) return template
+  return template.replace(
+    /\| `<your test command>`.*\n\| `<your build command>`.*\n\| `<your deploy\/status command>`.*\n/,
+    rows.join("\n") + "\n| `<your deploy/status command>` | did it ship | the deployed revision |\n",
+  )
+}
+
+function ensureSetIgnored(cwd) {
+  const path = join(cwd, ".gitignore")
+  if (!existsSync(path)) return "missing"
+  const lines = readFileSync(path, "utf8").split("\n").map((l) => l.trim())
+  if (lines.some((l) => l === ".set/" || l === ".set" || l === "/.set/" || l === "/.set")) return "already"
+  appendFileSync(path, "\n# Session scratch — /handoff writes here; never committed.\n.set/\n")
+  return "added"
+}
+
+// npm installs the bin as a SYMLINK (node_modules/.bin/set-claude-handoff), so argv[1] is that
+// name, not cli.mjs — a suffix check here would make the installed CLI silently do nothing.
+const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""
+if (invoked === fileURLToPath(import.meta.url)) {
+  process.exit(main(process.argv.slice(2)))
+}
