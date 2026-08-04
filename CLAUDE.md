@@ -44,6 +44,9 @@ a file in the repo — never from the directory name or a framework guess.
 
 ## Consumers
 
-Installed by hand in `set-atlas` and `a private sibling project` (both replace an earlier hand-forked copy). If
-the skill changes, `npx set-claude-handoff init` in those repos is the upgrade — and their
-profiles must survive it.
+Three repos, installed 2026-08-04: the ERP project this came from, `a private sibling project` (both replacing a
+hand-forked copy that had already drifted) and `set-atlas`. If the skill changes,
+`npx set-claude-handoff init` in those repos is the upgrade — and their profiles must survive it.
+
+**Before changing `SKILL.md`, read all three profiles.** They are the evidence for what actually
+had to be project-specific; a rule that only one of them needs does not belong in the package.
