@@ -78,6 +78,97 @@ not run all of them blindly.
 **Do not claim what you did not measure.** If a number is missing, write *"not measured"*. That
 is always cheaper than a plausible but false number the successor takes at face value.
 
+### Phase 1b — THE OTHER CARRIERS: what else outlives this session
+
+⚠ **The handoff is not the only thing that survives.** A session also leaves behind persistent
+memory, gitignored scratch, and background processes — and the successor meets **those first**,
+because a handoff has to be loaded by hand while memory is injected automatically. **A wrong
+memory is therefore more dangerous than a wrong handoff.**
+
+Measured, in the session this section was added from: a memory written in the first hour said the
+key data source was one subsystem and that a certain kind of write was impossible. Both were
+disproven **the same day**, by this same session. Nobody would have caught it — the handoff was
+correct, and the successor would have started from the memory.
+
+So before writing the handoff, go through what this session wrote to any persistent carrier:
+
+```bash
+# persistent memory — did THIS session write or change any of it?
+ls -lt <memory-dir>/*.md 2>/dev/null | head        # e.g. ~/.claude/projects/<slug>/memory/
+# anything gitignored that would vanish: scratch dirs, run state, drafts
+git status --short --ignored 2>/dev/null | grep '^!!' | head
+# background processes this session started and did not stop
+ps -eo pid,etime,args --no-headers | grep "[m]y-probe-pattern"
+```
+
+For each memory this session wrote: **is it still true after everything measured since?** If not,
+**fix it now, in the same breath** — and say in the handoff that you did, including what was wrong.
+A corrected memory that hides its own correction invites the next session to re-derive the error.
+
+Then record in the handoff, under §4:
+
+- which memory entries this session wrote or corrected, and **why** the correction was needed;
+- which files exist only in scratch — see the rescue rule below;
+- any background process still running, or an explicit "none left".
+
+Do **not** silently reach for a wholesale cleanup here — see the warning in Phase 3.
+
+#### Scratch that is expensive to rebuild must be RESCUED, not merely named
+
+The list above says "name the scratch files". That is not enough, and the gap is measured: a
+session produced 3 400 lines of extracted, cross-checked data in the scratchpad — hours of
+subagent work — and the handoff dutifully *named* the directory. The scratchpad dies with the
+session. Naming it hands the successor a receipt for something already gone.
+
+So apply a cost test to every scratch artifact, and act on the answer:
+
+| rebuild cost | what to do |
+|---|---|
+| one command, seconds | name it and the command that regenerates it — that is enough |
+| minutes of scripted work | name it, and paste the exact command into §0 |
+| **subagent runs, API calls, or anything measured in hours** | **copy it somewhere that survives** — a gitignored directory inside the repo, or an explicitly named path outside the scratchpad — and say in §4 where it went |
+
+The rescue is two lines of `cp`. Skipping it is the one loss in this whole document that
+**cannot be undone by the successor at any price**: a commit can be reverted, a memory can be
+corrected, a wrong number can be re-measured — but a deleted scratch tree that cost three hours
+of agent time is simply gone.
+
+#### Harness-tracked work is a carrier too — and it is invisible to `ps`
+
+A background Workflow, a queued task, a long-running tool call: none of these show up in
+`ps` under a name you can grep, and none of them survive the session — but several of them
+**can be resumed** if, and only if, their identifiers were written down.
+
+Record, for anything launched this session that is still running or finished within it:
+
+- the **run/task id** and the **script or transcript path** (a workflow can be resumed with
+  `{scriptPath, resumeFromRunId}`; without both, the cached agent results are unreachable);
+- whether it **finished, is still running, or was abandoned** — and if it was still running when
+  the handoff was written, say so plainly, and say where its output will land;
+- what it was *for*, in one line, so the successor can decide whether resuming is even wanted.
+
+The failure this prevents: the successor sees the output files, cannot tell whether the run
+completed, and re-runs the whole thing — paying the full cost a second time to learn something
+the previous session already knew.
+
+#### Anything published outward carries a URL, and the URL is the artifact
+
+If this session published, deployed, or shared anything that lives at an address — a published
+page, a PR, an issue, a document in a connected service — **the address goes in the handoff**.
+
+This is not bookkeeping. A successor who cannot find the URL does not fail loudly: it publishes
+a *second* one. Now two versions exist, the link already given to other people points at the
+stale one, and nothing anywhere reports a conflict. Write the URL, and write what it contains.
+
+#### If the session joined a channel, the successor is a different participant
+
+Where sessions talk to each other (a message bus, a shared room, a queue), identity is usually
+**per session**, not per project — so the successor arrives as a *new* participant. It will not
+inherit the unread mail, and the other side will not know the seat changed.
+
+Record: which room or channel, under what name this session appeared, whether anything was left
+unanswered, and who is waiting on a reply.
+
 ### Phase 2 — ID and file
 
 If this session **was loaded with `/handoff <ID>`**, reuse **that same ID** — a thread's ID is
@@ -129,6 +220,12 @@ from the outside:
 
 <With commit SHAs (from `git log`) and measured numbers.>
 
+<Then, from Phase 1b — the carriers OTHER than this file:
+ · memory written or corrected by this session, and why;
+ · files that live only in scratch and will die with it;
+ · background processes still running, or "none left".
+ If none of the three applies, say so — a missing section and an empty one look identical.>
+
 ## 5. Next steps, in order
 
 1. …
@@ -137,6 +234,13 @@ from the outside:
 
 <If another session works in parallel: which files/directories are theirs.
  If none: "no parallel thread".>
+
+## 7. What we learned about the METHOD
+
+<Only what would change HOW the successor works — not what it should work on.
+ A technique that turned out not to pay for itself; an ordering that should have been
+ the other way round; a check that caught something nothing else would have.
+ Each with the measurement that showed it. If nothing: "nothing methodological".>
 ```
 
 If the profile has a **Template extras** section, apply it here — an extra column, an extra
@@ -164,7 +268,26 @@ Handoff written: .set/handoff/0726-3f9a--session-budget.md
 2 open threads, 1 waiting on a user decision. Ready for /clear.
 ```
 
-`/clear` is issued **by the user**, not by you — no session has a tool to erase its own context.
+`/clear` is issued **by the user** — or by the session's own automation, when the gates hold (handoff written for THIS session, context past the threshold, idle, no pending prompt; an external executor types it — see `templates/clear-gate.mjs` and `templates/selftest-clear-reload.sh` in the package). Never by your own tools: no session has a tool to erase its own context.
+
+### Phase 4b — make it visible to the fleet
+
+**The handoff file is gitignored and machine-local by design — which means an orchestration
+layer (a fleet view, a registry, another machine) has NO trace of it.** Measured 2026-09-12:
+the fleet view of the coordinating session showed nothing about a written handoff, because it
+reads the agent-comm store (registry, focus, beats) and tracked repo files — and the handoff
+lives in a gitignored directory with a trace in neither.
+
+So if the session has the agent-comm `focus` tool, **announce the handoff on focus** as the
+last step of writing (and of loading):
+
+- after writing: focus text `handoff <ID> written — <slug>; successor loads it with /handoff <ID>`
+- after loading: focus text `handoff <ID> loaded — continuing <slug>`
+
+The focus is what a fleet view already renders for the seat, so the handoff becomes visible
+there with zero new infrastructure. Where the tool does not exist, this step is a no-op —
+skip it silently. Do NOT commit the handoff to make it visible: the file stays local (a
+message between sessions, not a repo artifact); the POINTER travels, not the file.
 
 ---
 
@@ -178,6 +301,10 @@ Read it, then **run the §0 probes** and **state the measured state**, not what 
 the file is the *last* truth, the command is the *current* one. If they disagree, that itself is
 a finding. Remember the ID: if you later write a handoff again, update **this** one.
 
+If the session has the agent-comm `focus` tool, update it (Phase 4b): `handoff <ID> loaded —
+continuing <slug>` — so the fleet view shows the thread was picked up, not that it is still
+waiting.
+
 ## `/handoff list` — what is written
 
 ```bash
@@ -190,7 +317,7 @@ request, with `rm`.
 
 ---
 
-## The three rules the skeleton is shaped by
+## The four rules the skeleton is shaped by
 
 1. **Every thread goes across, not just the running one.** The measured failure, in the user's
    words: *"I define several tasks in one session, and at the end it gets lost, it drops out…
@@ -198,9 +325,16 @@ request, with `rm`.
 2. **Decision ≠ work.** What only the user can decide, the successor **will not** decide; if it
    is not marked, it either waits (deadlock) or gets decided for them (worse).
 3. **Numbers only from commands.** See Phase 1.
+4. **What cannot be rebuilt is rescued, not described.** Everything else in a handoff is a
+   pointer — a path, an id, a URL — and a pointer is enough, because the thing it points at
+   still exists. Scratch is the exception: it is the one carrier that dies at the same moment
+   the handoff is written. See the rescue rule in Phase 1b.
 
 ## Related
 
 - `.claude/handoff.profile.md` — this project's probes and specifics (project-owned)
 - The project's own memory / knowledge base, if it has one. A handoff does **not** replace it:
   memory is what is true in *every* session; a handoff is what is open in *this thread*.
+  ⚠ But it is not independent of it either — **Phase 1b**: memory reaches the successor before the
+  handoff does, so anything this session wrote there is checked, and corrected if a later
+  measurement disproved it.

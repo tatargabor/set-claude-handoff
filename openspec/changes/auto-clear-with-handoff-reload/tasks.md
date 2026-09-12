@@ -1,0 +1,39 @@
+## 1. Skill sync-back (precondition)
+
+- [x] 1.1 Diff `skills/handoff/SKILL.md` against the installed `~/.claude/skills/handoff/SKILL.md`; sync the installed (newer, measured 2026-09-12) content back into the repo; `node --test` stays green.
+- [x] 1.2 Verify content parity after sync (byte-identical or intentionally different only in install-path placeholders); record the result in the commit message.
+
+## 2. Marker convention (specs: auto-clear / Per-session armed marker)
+
+- [x] 2.1 Define the marker in `templates/`: path `<handoff-dir>/.written-<session8>`, content = ISO timestamp; document that a failed gate leaves no marker.
+- [x] 2.2 Regression test: a handoff that fails the content gate must NOT produce a marker (guards: a failing gate must never arm a session).
+
+## 3. Context-size persistence (specs: auto-clear / Gates; design decision 2)
+
+- [x] 3.1 Ship `templates/statusline-persist.sh`: appends `context_window.total_input_tokens` + timestamp to a runtime file on every statusline render; reads older than the freshness bound count as unknown.
+- [x] 3.2 Regression test: a stale or missing token file evaluates to "not eligible" (guards: unknown must never read as above-threshold).
+
+## 4. Gate script and executor contract (specs: auto-clear)
+
+- [x] 4.1 Ship `templates/clear-gate.mjs`: evaluates all gates (threshold, own-session fresh marker, idle transcript tail, no pending permission, background-work policy from profile); `--dry-run` prints per-gate outcomes and exits without triggering; JSON output for the executor.
+- [x] 4.2 Regression tests, one per spec scenario, each named for the bug it guards: sibling-session marker must not arm; pending permission must block; idle requires no pending tool result; dry-run must never execute the trigger.
+- [x] 4.3 `init` wiring (opt-in): installs gate + reinject templates as package-owned files only; documents the profile fields (`clearThresholdTokens` default 500000, tokenFreshnessBound, `backgroundWorkBlocks` default true) without writing the profile (two-owners boundary).
+- [x] 4.4 Ship `templates/hooks/handoff-reinject-clear.mjs` (SessionStart, matchers `clear` and `compact`): pointer + preview within the 10 000-char cap, loud truncation notice naming the file, idempotency keyed per event occurrence (not per session — guards the measured 4-of-17 reinject suppression), mtime-heuristic announcement naming other live handoffs, and the no-handoff notice.
+- [x] 4.5 Regression tests for 4.4, each named for the bug it guards: a second compact/clear in the same session must reinject again (guards the measured once-per-session suppression: reinject visible in only 4 of 17 compacts); a later unrelated session-start event must not re-inject (guards: the reload must not re-grow the context the clear freed); over-cap handoff must produce pointer + notice, never silent truncation; clear with no handoff must produce the empty-reload notice (guards: an unloaded context must not look loaded).
+
+## 5. Skill amendment
+
+- [x] 5.1 Phase 4 one-line amendment: `/clear` is issued by the user *or by the session's own automation when the gates hold*; README gains a short "automatic clear" pointer to the templates.
+
+## 6. consumer-repo pilot (validation — executes in the consumer repo)
+
+- [x] 6.1 `scripts/hooks/handoff-write-check.mjs`: drop `.written-<session8>` on gate pass (package template, consumer wiring).
+- [x] 6.2 Extend `scripts/hooks/handoff-reinject.mjs` to the `clear` matcher (or replace with the package template) and live-verify on 2.1.269 that `SessionStart source: clear` fires and injects before the first response.
+- [x] 6.3 `~/.claude/statusline.sh`: persist `total_input_tokens` (template from 3.1).
+- [x] 6.4 Measure whether harness-tracked background tasks survive `/clear` in 2.1.269; record the measurement; set `backgroundWorkBlocks` from the result (relax only with the measurement on record).
+- [ ] 6.5 Run the watcher in `--dry-run` for at least one unattended night under tmux or the fleet owner; log per-gate outcomes and near-miss timings; no keystrokes reach any session. *(Superseded 2026-09-12 by explicit user decision: arming was ordered without the dry-run night. The armed watcher logs every per-gate verdict to `.set/handoff/auto-clear.log`, so the evidence a dry-run would have produced now accumulates in the log instead — reviewed post hoc under 6.6.)*
+- [ ] 6.6 Review the dry-run measurements; arm the trigger; write the pilot result back into this package's docs as the promotion evidence. *(Armed 2026-09-12 on user order; post-hoc log review pending — the first nights of `auto-clear.log` are the promotion evidence.)*
+
+## 7. Live selftest
+
+- [x] 7.1 Ship `templates/selftest-clear-reload.sh`: in a scratch session, write a handoff, `/clear`, and assert the injection arrives (pointer + preview) — the same selftest shape as `handoff-resolve.selftest.sh`, so a platform drift in the `clear` source or the cap fails loudly, not silently.

@@ -106,6 +106,17 @@ only cause is that the file outlives the read. Loading by ID makes all of it unn
    "roughly" because the sentence formally requires them. The successor **cannot check them**.
    Not measured → write *"not measured"*.
 
+## Automatic clear (opt-in)
+
+`init --auto-clear` also installs two hook templates: **`clear-gate`** — decides whether a session may be
+cleared automatically (context ≥ threshold, this session's own handoff marker, idle, no pending prompt,
+background-work policy), and **`handoff-reinject-clear`** — a `SessionStart` hook (`clear` | `compact`)
+that reloads the latest handoff into the fresh context as pointer + preview. The gate never clears; an
+external executor (tmux send-keys, the fleet pty owner) reads its verdict and types `/clear` — every
+`/clear` then reloads, manual or automatic. Auto-compact stays untouched as the backstop. See
+`specs/auto-clear` and `specs/clear-reload` in `openspec/`, and verify your environment with
+`templates/selftest-clear-reload.sh`.
+
 ## Related
 
 - [set-copilot](https://github.com/tatargabor/set-copilot) — voice dictation + meeting copilot for Claude Code

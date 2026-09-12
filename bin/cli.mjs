@@ -18,7 +18,9 @@ const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"))
 
 const USAGE = `set-claude-handoff ${VERSION}
 
-  set-claude-handoff init [--global]   install the /handoff skill into this project (or ~/.claude)
+  set-claude-handoff init [--global] [--auto-clear]
+                                       install the /handoff skill into this project (or ~/.claude);
+                                       --auto-clear also installs the auto-clear hook templates (opt-in)
   set-claude-handoff --version
   set-claude-handoff help
 
@@ -26,13 +28,20 @@ init writes:
   .claude/skills/handoff/SKILL.md    the skill      (overwritten on re-run = upgrade)
   .claude/handoff.profile.md         your probes    (created once, never overwritten)
   .gitignore                         a .set/ entry, if the repo does not ignore it yet
+
+--auto-clear additionally writes (package-owned, overwritten on re-run):
+  .claude/hooks/clear-gate.mjs              the gate — evaluates, never triggers
+  .claude/hooks/handoff-reinject-clear.mjs  SessionStart(clear|compact) reload
+and PRINTS the settings.json hook snippet + profile fields for you to merge — init never
+edits settings.json or your statusline (they are yours; a clobbering installer is one
+nobody runs).
 `
 
 function main(argv) {
   const [cmd = "help", ...rest] = argv
   switch (cmd) {
     case "init":
-      return cmdInit({ global: rest.includes("--global"), cwd: process.cwd() })
+      return cmdInit({ global: rest.includes("--global"), autoClear: rest.includes("--auto-clear"), cwd: process.cwd() })
     case "--version":
     case "-v":
       console.log(VERSION)
@@ -49,7 +58,7 @@ function main(argv) {
   }
 }
 
-export function cmdInit({ global = false, cwd = process.cwd(), log = console.log } = {}) {
+export function cmdInit({ global = false, autoClear = false, cwd = process.cwd(), log = console.log } = {}) {
   const target = global ? join(homedir(), ".claude") : join(cwd, ".claude")
   const skillDir = join(target, "skills", "handoff")
 
@@ -58,6 +67,8 @@ export function cmdInit({ global = false, cwd = process.cwd(), log = console.log
   const existed = existsSync(skillPath)
   writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "handoff", "SKILL.md"), "utf8"))
   log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
+
+  if (autoClear) installAutoClear({ target, cwd, log })
 
   if (global) {
     // The profile describes ONE project's probes, so a user-wide install has nothing to put in
@@ -87,6 +98,43 @@ export function cmdInit({ global = false, cwd = process.cwd(), log = console.log
 function rel(cwd, p) {
   const r = relative(cwd, p)
   return r.startsWith("..") ? p : r
+}
+
+/**
+ * The auto-clear half (opt-in via --auto-clear). Installs the two package-owned hook files,
+ * then PRINTS what the project must merge itself: the settings.json hook registration and the
+ * statusline fragment. settings.json and the statusline are consumer-owned — an installer that
+ * edits them could clobber a project's own hooks, and an upgrade nobody dares run is no upgrade.
+ */
+function installAutoClear({ target, cwd, log }) {
+  const hooksDir = join(target, "hooks")
+  mkdirSync(hooksDir, { recursive: true })
+  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs")]) {
+    const src = join(PKG_ROOT, "templates", f)
+    const dst = join(hooksDir, f.split("/").pop())
+    writeFileSync(dst, readFileSync(src, "utf8"))
+    log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
+  }
+  log(`
+Next, merge YOURSELF (init never touches these — they are consumer-owned):
+
+1. .claude/settings.json — add to "hooks"."SessionStart" (merge with existing matchers):
+     { "matcher": "clear|compact", "hooks": [ { "type": "command",
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/handoff-reinject-clear.mjs\\"", "timeout": 15 } ] }
+
+2. Your statusline (~/.claude/statusline.sh) — paste the fragment from
+   templates/statusline-persist.sh so .set/handoff/.context-tokens gets the live token count.
+
+3. Profile fields (document them in .claude/handoff.profile.md — init does not write profiles):
+     clearThresholdTokens: 500000   tokenFreshnessSeconds: 300   backgroundWorkBlocks: true
+   Pass them to the gate:  node .claude/hooks/clear-gate.mjs --threshold 500000 --freshness 300
+                           --background-work-blocks true --session <id> --transcript <path> --json
+
+The gate only EVALUATES (exit 0, verdict in stdout/--json); an external executor — tmux
+send-keys or the fleet pty owner — reads the verdict and types /clear. See the specs:
+specs/auto-clear (gates) and specs/clear-reload (reload), plus templates/selftest-clear-reload.sh
+for the live check.`)
+  return 0
 }
 
 /**
