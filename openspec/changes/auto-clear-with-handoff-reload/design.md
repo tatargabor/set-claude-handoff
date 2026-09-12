@@ -29,16 +29,21 @@ cannot be typed into (`legacy_tiocsti=0`). The installed skill is ahead of this 
    "unknown", and unknown is not above-threshold. *Alternative rejected*: parsing transcript `usage` fields
    as the primary — it works today (context-guard proves it) but is documented as breakable on any release.
 3. **The package ships the contract; the environment ships the keystrokes.** The gate is a testable script
-   + template; the trigger is implemented per environment (tmux send-keys for the pilot, fleet pty write
-   and a headless Remote-Control client as later options). Meeting decision 2026-09-12: fleet owner is the
-   target (it starts the session and owns its pty), tmux is the pilot vehicle — and the condition on tmux
-   is now measured, not assumed: send-keys into a live 2.1.269 TUI verified end-to-end on this machine
-   (typed text renders on the input line; `/clear` + Enter swaps to a fresh session in the same pane,
-   process alive). Probe gotchas worth keeping: a `claude` whose stdout is not the pane tty drops to print
-   mode and exits (the executor must never wrap the session's stdio), and a first-launch trust dialog
-   swallows keystrokes exactly like a permission prompt — both confirm the "no pending prompt" gate.
-   *Alternatives considered*: set-copilot sidecar as the watcher host (viable, deferred); systemd user
-   unit (viable, more moving parts).
+   + template; the trigger is implemented per environment. Corrected 2026-09-12 evening (user challenge,
+   verified in set-core source): fleet agents are launched as **`claude -p`** (`chat.py` stream-json,
+   `subprocess_utils.py` one-shot) — **`/clear` typed into them is meaningless** (no TUI parses slash
+   commands; in stream-json mode raw text is not a valid frame). So there are two context-management
+   planes, and they must not be conflated: **(a) interactive TUI sessions** — the pty master is tmux, the
+   executor is `tmux send-keys` (measured end-to-end on 2.1.269: typed text renders, `/clear` + Enter
+   swaps to a fresh session, process alive); **(b) fleet `-p` agents** — no keystrokes apply; context is
+   managed by the **manager rotating the process** (close at the threshold, start fresh, carry the
+   handoff) — the manager already receives per-agent token counts (`context_fill.py`), so it holds both
+   levers in-protocol, and this is the same shape as the 2026-09-01 "no long-lived controller context"
+   decision. The earlier "fleet owner types /clear" idea is dropped as a category error. Probe gotchas
+   worth keeping: a `claude` whose stdout is not the pane tty drops to print mode and exits (the executor
+   must never wrap the session's stdio), and a first-launch trust dialog swallows keystrokes exactly like
+   a permission prompt — both confirm the "no pending prompt" gate. *Alternatives considered*: set-copilot
+   sidecar as the watcher host (viable, deferred); systemd user unit (viable, more moving parts).
 4. **One reinject hook, both matchers (`clear` and `compact`), pointer + preview, idempotency per
    event.** Generalizing the proven compact reinject avoids a second implementation of the same safety
    rules. Measured defect in the current hook being fixed here: its once-per-**session** marker suppresses

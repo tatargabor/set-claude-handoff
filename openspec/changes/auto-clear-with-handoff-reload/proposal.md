@@ -62,7 +62,9 @@ the gates hold, and a guaranteed reload after **every** `/clear` — documented 
   `scripts/hooks/handoff-reinject.mjs` (extend to the `clear` matcher), `~/.claude/statusline.sh`
   (persist `total_input_tokens`), a dry-run watcher; no product code touched.
 - **Environment assumptions**: Claude Code 2.1.269 (`SessionStart source: clear`, 10k hook-output cap,
-  statusline `context_window`); a terminal-write path must exist for the trigger (fleet owner, tmux, or
-  Remote Control — a bare foreign terminal is a system boundary, `legacy_tiocsti=0`).
+  statusline `context_window`); a terminal-write path must exist for the trigger — **tmux for interactive
+  sessions** (fleet `-p` agents are out of scope for keystrokes: `/clear` is meaningless without a TUI;
+  their context is the manager's process rotation with a handoff — a bare foreign terminal is a system
+  boundary, `legacy_tiocsti=0`).
 - **Assumption recorded**: the change is drafted package-side; thresholds live in profiles (500k default),
   and the consumer-repo pilot is the validation phase of tasks.md, not a separate change.

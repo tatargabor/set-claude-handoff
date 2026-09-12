@@ -37,3 +37,9 @@
 ## 7. Live selftest
 
 - [x] 7.1 Ship `templates/selftest-clear-reload.sh`: in a scratch session, write a handoff, `/clear`, and assert the injection arrives (pointer + preview) — the same selftest shape as `handoff-resolve.selftest.sh`, so a platform drift in the `clear` source or the cap fails loudly, not silently.
+
+## 8. Fleet `-p` rotation contract (scope added by user order, 2026-09-12 evening)
+
+- [x] 8.1 Correct the design: fleet agents are `claude -p` (`chat.py` stream-json, `subprocess_utils.py` one-shot) — `/clear` typed into them is a category error (no TUI parses it); context for headless runs is **manager-side process rotation with a handoff**, reusing the gate verbatim as the rotation trigger (spec: auto-clear, two new requirements).
+- [x] 8.2 Ship `templates/fleet-rotation.md`: the rotation protocol (instruct → wait for THIS run's marker → rotate → fresh run loads the handoff), the gate reuse, the no-silent-rotation rule, and the manager-side sketch.
+- [ ] 8.3 Wire the rotation into set-core's manager (that repo's own OpenSpec change; this package supplies the gate, the marker convention and the protocol).
