@@ -117,6 +117,12 @@ external executor (tmux send-keys, the fleet pty owner) reads its verdict and ty
 `specs/auto-clear` and `specs/clear-reload` in `openspec/`, and verify your environment with
 `templates/selftest-clear-reload.sh`.
 
+**Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
+(`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —
+the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the
+agent in that session to create it for you; a verbal "don't clear me" without the file binds
+nothing.
+
 ## Related
 
 - [set-copilot](https://github.com/tatargabor/set-copilot) — voice dictation + meeting copilot for Claude Code
