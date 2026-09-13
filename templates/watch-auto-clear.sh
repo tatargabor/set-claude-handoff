@@ -31,12 +31,14 @@
 # Usage:
 #   watch-auto-clear.sh --dir <projectRoot> [--interval SEC] [--threshold N] [--freshness SEC]
 #     [--background-work-blocks true|false] [--started-after ISO] [--gate PATH] [--dry-run]
+#     [--auto-continue PROMPT] [--continue-delay SEC]
 #
 # Run it under tmux/systemd/nohup — it must outlive the sessions it watches. Runtime state:
 #   <root>/.set/handoff/auto-clear.log     one line per verdict
 set -u
 
 DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="true"; AFTER=""; GATE=""; DRY=0
+CONTINUE_PROMPT=""; CONTINUE_DELAY=20
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2;;
@@ -46,6 +48,8 @@ while [ $# -gt 0 ]; do
     --background-work-blocks) BG="$2"; shift 2;;
     --started-after) AFTER="$2"; shift 2;;
     --gate) GATE="$2"; shift 2;;
+    --auto-continue) CONTINUE_PROMPT="$2"; shift 2;;
+    --continue-delay) CONTINUE_DELAY="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -112,6 +116,33 @@ except Exception:
 PY
 }
 
+# Step 5 of the cycle (--auto-continue, user ask 2026-09-13: "why we do the clear and reload
+# is to continue work"): after a successful automatic clear, give the fresh session its first
+# prompt — continue from the reloaded handoff. Fires ONLY after the watcher's own clears, never
+# after a manual /clear (a human at the keyboard decides that themselves).
+continue_tmux() {
+  [ -n "$CONTINUE_PROMPT" ] || return 0
+  sleep "$CONTINUE_DELAY"
+  tmux send-keys -t "$1" C-u
+  sleep 0.3
+  tmux send-keys -t "$1" "$CONTINUE_PROMPT" Enter
+  log "CONTINUE sent  auto-continue prompt → pane $1"
+}
+continue_owner() {
+  [ -n "$CONTINUE_PROMPT" ] || return 0
+  sleep "$CONTINUE_DELAY"
+  python3 - "$1" "$CONTINUE_PROMPT" <<'PY' 2>/dev/null
+import sys
+try:
+    from set_orch.fleet.owner_client import OwnerClient
+    data = b"\x15" + sys.argv[2].encode("utf-8") + b"\r"   # C-U, then the prompt
+    sys.exit(0 if OwnerClient().write(sys.argv[1], data) else 1)
+except Exception:
+    sys.exit(1)
+PY
+  log "CONTINUE sent  auto-continue prompt → fleet agent $1"
+}
+
 # Is pid $1 a descendant of tmux pane pid $2? Walks the /proc parent chain.
 is_descendant() {
   local p="$1" want="$2"
@@ -122,7 +153,7 @@ is_descendant() {
   return 1
 }
 
-log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY"
+log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off)"
 while :; do
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
@@ -162,6 +193,7 @@ while :; do
         log "FIRE  $sid  /clear → fleet owner-write to $label (all gates held)"
         if fleet_write_clear "$label"; then
           log "sent  $sid  owner-write delivered to $label"
+          continue_owner "$label"
         else
           log "skip  $sid  owner-write FAILED for $label"
         fi
@@ -178,6 +210,7 @@ while :; do
     tmux send-keys -t "$pane" C-u
     sleep 0.3
     tmux send-keys -t "$pane" "/clear" Enter
+    continue_tmux "$pane"
   done
   sleep "$INTERVAL"
 done

@@ -117,6 +117,11 @@ external executor (tmux send-keys, the fleet pty owner) reads its verdict and ty
 `specs/auto-clear` and `specs/clear-reload` in `openspec/`, and verify your environment with
 `templates/selftest-clear-reload.sh`.
 
+**Auto-continue:** the executor may take `--auto-continue "PROMPT"` — after a successful
+automatic clear it re-prompts the fresh session (default off; the prompt should tell the agent
+to read the full handoff and continue its next-steps section, stopping at decision blocks).
+Fires only after automatic clears, never manual ones.
+
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
 (`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —
 the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the
