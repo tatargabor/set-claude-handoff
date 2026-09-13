@@ -168,3 +168,16 @@ test("an opt-out marker blocks the clear even when every other gate holds — th
   assert.equal(withOptOut.eligible, false, "the user's disable must beat every other gate")
   assert.match(withOptOut.gates.find((g) => g.name === "optout").detail, /disabled for this session/)
 })
+
+test("a PROJECT opt-out (.no-autoclear) blocks every session in the tree — the wider switch beats all gates", () => {
+  const dir = tmp()
+  const tr = join(dir, "t.jsonl")
+  GOOD_TRANSCRIPT(tr)
+  writeFileSync(join(dir, ".context-tokens-aaaaaaaa"), JSON.stringify({ totalInputTokens: 600_000, updatedAt: new Date().toISOString() }))
+  armMarker(dir, "aaaaaaaa-1111", "0912-aaaa--thread.md", { passed: true })
+  writeFileSync(join(dir, "0912-aaaa--thread.md"), "# handoff\n\nBackground: none left.\n")
+  writeFileSync(join(dir, ".no-autoclear"), "project-wide off, 2026-09-13\n")
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, false, "a tree-wide disable beats every other gate")
+  assert.match(res.gates.find((g) => g.name === "optout").detail, /disabled for this tree/)
+})

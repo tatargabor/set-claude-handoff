@@ -108,6 +108,11 @@ only cause is that the file outlives the read. Loading by ID makes all of it unn
 
 ## Automatic clear (opt-in)
 
+Arm it from any project with the `/auto-clear` skill (installed by every `init`): it checks
+the measured state, installs the machinery, starts the watcher with the profile's tuning, and
+verifies the log before calling it armed. Two kill-switch scopes, both plain files in
+`.set/handoff/`: `.no-autoclear` (whole tree) and `.no-autoclear-<session8>` (one session).
+
 `init --auto-clear` also installs two hook templates: **`clear-gate`** — decides whether a session may be
 cleared automatically (context ≥ threshold, this session's own handoff marker, idle, no pending prompt,
 background-work policy), and **`handoff-reinject-clear`** — a `SessionStart` hook (`clear` | `compact`)

@@ -21,11 +21,13 @@ const USAGE = `set-claude-handoff ${VERSION}
   set-claude-handoff init [--global] [--auto-clear]
                                        install the /handoff skill into this project (or ~/.claude);
                                        --auto-clear also installs the auto-clear hook templates (opt-in)
+                                       (both installs ship the /auto-clear on/off switchboard skill)
   set-claude-handoff --version
   set-claude-handoff help
 
 init writes:
   .claude/skills/handoff/SKILL.md    the skill      (overwritten on re-run = upgrade)
+  .claude/skills/auto-clear/SKILL.md the /auto-clear on/off switchboard (same)
   .claude/handoff.profile.md         your probes    (created once, never overwritten)
   .gitignore                         a .set/ entry, if the repo does not ignore it yet
 
@@ -67,6 +69,15 @@ export function cmdInit({ global = false, autoClear = false, cwd = process.cwd()
   const existed = existsSync(skillPath)
   writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "handoff", "SKILL.md"), "utf8"))
   log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
+
+  // The auto-clear SKILL (the on/off switchboard) always installs — it is tiny and must be
+  // invocable from any project; the machinery it arms stays behind --auto-clear.
+  const acSkillDir = join(target, "skills", "auto-clear")
+  mkdirSync(acSkillDir, { recursive: true })
+  const acSkillPath = join(acSkillDir, "SKILL.md")
+  const acExisted = existsSync(acSkillPath)
+  writeFileSync(acSkillPath, readFileSync(join(PKG_ROOT, "skills", "auto-clear", "SKILL.md"), "utf8"))
+  log(`${acExisted ? "updated" : "installed"}  ${rel(cwd, acSkillPath)}`)
 
   if (autoClear) installAutoClear({ target, cwd, log })
 

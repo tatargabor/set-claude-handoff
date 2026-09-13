@@ -118,3 +118,14 @@ test("an unknown command exits non-zero instead of pretending to work", () => {
     execFileSync(process.execPath, [join(PKG_ROOT, "bin/cli.mjs"), "instal"], { encoding: "utf8", stdio: "pipe" }),
   )
 })
+
+test("init installs the auto-clear switchboard skill alongside the handoff skill — activation must be invocable from any project", async () => {
+  const dir = project()
+  await cmdInit({ cwd: dir, log: silent })
+  const skill = readFileSync(join(dir, ".claude/skills/auto-clear/SKILL.md"), "utf8")
+  assert.match(skill, /^---\nname: auto-clear\n/)
+  // re-run overwrites it (package-owned = upgrade path), same as the handoff skill
+  writeFileSync(join(dir, ".claude/skills/auto-clear/SKILL.md"), "stale\n")
+  await cmdInit({ cwd: dir, log: silent })
+  assert.match(readFileSync(join(dir, ".claude/skills/auto-clear/SKILL.md"), "utf8"), /name: auto-clear/)
+})
