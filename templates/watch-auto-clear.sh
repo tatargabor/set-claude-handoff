@@ -120,27 +120,74 @@ PY
 # is to continue work"): after a successful automatic clear, give the fresh session its first
 # prompt — continue from the reloaded handoff. Fires ONLY after the watcher's own clears, never
 # after a manual /clear (a human at the keyboard decides that themselves).
-continue_tmux() {
+#
+# MEASURED (2026-09-13, the second bugfix fire): text+Enter in ONE write raced the fresh
+# session's SessionStart hook chain (timeouts up to 40s) — the TUI was not reading the pty yet,
+# the Enter was swallowed, and the prompt sat in the input box until the user pressed it by
+# hand. So: text first, Enter separately, then VERIFY from the pid's own fresh transcript
+# (the runtime record rewrites sessionId on a clear) and re-press Enter up to 3× if needed.
+verify_submitted() { # $1 = pid, $2 = fragment expected in the fresh transcript
+  local sid slug
+  sid=$(jq -r '.sessionId // empty' "$HOME/.claude/sessions/$1.json" 2>/dev/null)
+  [ -n "$sid" ] || return 1
+  slug=$(jq -r '.cwd // empty' "$HOME/.claude/sessions/$1.json" 2>/dev/null | sed 's/\//-/g')
+  [ -n "$slug" ] || return 1
+  local t="$HOME/.claude/projects/$slug/$sid.jsonl"
+  [ -f "$t" ] && grep -qF -- "$2" "$t"
+}
+
+continue_finish() { # $1 = pid, $2 = where (log label), $3.. = how to press Enter again
+  local pid="$1" where="$2" try
+  shift 2
+  local fragment="${CONTINUE_FRAGMENT:-auto-continue}"
+  for try in 1 2 3; do
+    sleep 5
+    if verify_submitted "$pid" "$fragment"; then
+      log "CONTINUE confirmed  prompt submitted (try $try) → $where"
+      return 0
+    fi
+    [ "$try" -le 2 ] && "$@"
+  done
+  log "CONTINUE UNCONFIRMED  prompt not found in the fresh transcript after 3 tries → $where"
+}
+
+continue_tmux() { # $1 = pane, $2 = pid
   [ -n "$CONTINUE_PROMPT" ] || return 0
   sleep "$CONTINUE_DELAY"
   tmux send-keys -t "$1" C-u
   sleep 0.3
-  tmux send-keys -t "$1" "$CONTINUE_PROMPT" Enter
+  tmux send-keys -t "$1" "$CONTINUE_PROMPT"
+  sleep 1.5
+  tmux send-keys -t "$1" Enter
   log "CONTINUE sent  auto-continue prompt → pane $1"
+  continue_finish "$2" "pane $1" tmux send-keys -t "$1" Enter
 }
-continue_owner() {
+continue_owner() { # $1 = fleet label, $2 = pid
   [ -n "$CONTINUE_PROMPT" ] || return 0
   sleep "$CONTINUE_DELAY"
   python3 - "$1" "$CONTINUE_PROMPT" <<'PY' 2>/dev/null
 import sys
 try:
     from set_orch.fleet.owner_client import OwnerClient
-    data = b"\x15" + sys.argv[2].encode("utf-8") + b"\r"   # C-U, then the prompt
+    data = b"\x15" + sys.argv[2].encode("utf-8")          # C-U, then the text — NO Enter yet
     sys.exit(0 if OwnerClient().write(sys.argv[1], data) else 1)
 except Exception:
     sys.exit(1)
 PY
+  sleep 1.5
+  fleet_owner_enter "$1"
   log "CONTINUE sent  auto-continue prompt → fleet agent $1"
+  continue_finish "$2" "fleet agent $1" fleet_owner_enter "$1"
+}
+fleet_owner_enter() {
+  python3 - "$1" <<'PY' 2>/dev/null
+import sys
+try:
+    from set_orch.fleet.owner_client import OwnerClient
+    OwnerClient().write(sys.argv[1], b"\r")
+except Exception:
+    pass
+PY
 }
 
 # Is pid $1 a descendant of tmux pane pid $2? Walks the /proc parent chain.
@@ -193,7 +240,7 @@ while :; do
         log "FIRE  $sid  /clear → fleet owner-write to $label (all gates held)"
         if fleet_write_clear "$label"; then
           log "sent  $sid  owner-write delivered to $label"
-          continue_owner "$label"
+          continue_owner "$label" "$pane_pid"
         else
           log "skip  $sid  owner-write FAILED for $label"
         fi
@@ -210,7 +257,7 @@ while :; do
     tmux send-keys -t "$pane" C-u
     sleep 0.3
     tmux send-keys -t "$pane" "/clear" Enter
-    continue_tmux "$pane"
+    continue_tmux "$pane" "$pane_pid"
   done
   sleep "$INTERVAL"
 done
