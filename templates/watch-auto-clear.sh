@@ -14,7 +14,19 @@
 #   - --started-after drops sessions started before a moment (e.g. before the clear-reload
 #     hook was wired into settings — clearing a session that cannot reload is the one really
 #     dangerous combination);
-#   - a session not hosted by any tmux pane is skipped with a logged reason (no writer path).
+#   - a session with no writer path is skipped with a logged reason: no tmux pane hosts it
+#     AND no fleet agent (ownerd roster, matched by pid) holds it.
+#
+# Writers, in order (9.2, measured 2026-09-13: 65 overnight skips of ELIGIBLE sessions whose
+# ownerd-held pty no tmux pane hosts):
+#   1. tmux send-keys into the pane whose descendant the session pid is;
+#   2. OwnerClient.write to the fleet agent whose roster pid matches — ESC + C-U + "/clear\r",
+#      the shape measured working on a live fleet-held agent. Read-only fallback if neither
+#      exists: the skip is logged, never silent.
+#
+# Sessions are matched against EVERY worktree of --dir (9.1, measured: a worktree agent's cwd
+# is the worktree, and its handoff dir lives there too — gating it against the main tree
+# would read the wrong marker and the wrong handoff).
 #
 # Usage:
 #   watch-auto-clear.sh --dir <projectRoot> [--interval SEC] [--threshold N] [--freshness SEC]
@@ -42,13 +54,63 @@ done
 DIR="$(cd "$DIR" && pwd)"
 GATE="${GATE:-$DIR/.claude/hooks/clear-gate.mjs}"
 [ -f "$GATE" ] || { echo "gate not found: $GATE" >&2; exit 2; }
-command -v tmux >/dev/null || { echo "tmux not available — no writer path" >&2; exit 2; }
 
 LOG="$DIR/.set/handoff/auto-clear.log"
 mkdir -p "$(dirname "$LOG")"
 AFTER_MS=""; [ -n "$AFTER" ] && AFTER_MS=$(date -d "$AFTER" +%s%3N 2>/dev/null)
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+if ! command -v tmux >/dev/null; then
+  if python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
+    log "tmux not available — the writer path is the fleet owner only"
+  else
+    echo "tmux not available and the fleet owner client is not importable — no writer path" >&2
+    exit 2
+  fi
+fi
+
+# Every worktree of DIR is a legitimate session cwd — and each tree gates from ITS OWN
+# .set/handoff (9.1). The main tree is first; worktree enumeration failing (plain dir, no
+# git) leaves the main tree alone, which is the pre-9.1 behavior.
+WORKTREES="$DIR"
+while IFS= read -r wt; do
+  [ -n "$wt" ] && [ "$wt" != "$DIR" ] && WORKTREES="$WORKTREES
+$wt"
+done < <(git -C "$DIR" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+
+tree_of() { printf '%s\n' "$WORKTREES" | grep -Fx "$1"; }
+
+# The fleet-owner writer (9.2): roster lookup by pid, then the measured keystroke shape.
+fleet_label_for_pid() {
+  [ -n "${1:-}" ] || return 0
+  python3 - "$1" <<'PY' 2>/dev/null
+import sys
+try:
+    from set_orch.fleet.owner_client import OwnerClient
+    pid = int(sys.argv[1])
+    for a in OwnerClient().list_agents():
+        if a.get("pid") == pid:
+            print(a.get("label", ""))
+            break
+except Exception:
+    pass
+PY
+}
+
+fleet_write_clear() {
+  python3 - "$1" <<'PY' 2>/dev/null
+import sys
+try:
+    from set_orch.fleet.owner_client import OwnerClient
+    # ESC dismisses any open dialog; C-U kills the input line (a half-typed command must not
+    # be completed by our keystrokes); then the command. Measured working shape.
+    written = OwnerClient().write(sys.argv[1], b"\x1b\x15/clear\r")
+    sys.exit(0 if written else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
 
 # Is pid $1 a descendant of tmux pane pid $2? Walks the /proc parent chain.
 is_descendant() {
@@ -66,7 +128,8 @@ while :; do
     [ -f "$rec" ] || continue
     sid=$(jq -r '.sessionId // empty' "$rec" 2>/dev/null) || continue
     cwd=$(jq -r '.cwd // empty' "$rec" 2>/dev/null)
-    [ "$cwd" = "$DIR" ] || continue
+    tree=$(tree_of "$cwd")
+    [ -n "$tree" ] || continue
     [ -n "$sid" ] || continue
     if [ -n "$AFTER_MS" ]; then
       started=$(jq -r '.startedAt // 0' "$rec" 2>/dev/null)
@@ -74,7 +137,7 @@ while :; do
     fi
     slug=$(printf '%s' "$cwd" | sed 's/\//-/g')
     transcript="$HOME/.claude/projects/$slug/$sid.jsonl"
-    gate_args=(--session "$sid" --transcript "$transcript" --dir "$DIR/.set/handoff" --json --background-work-blocks "$BG")
+    gate_args=(--session "$sid" --transcript "$transcript" --dir "$tree/.set/handoff" --json --background-work-blocks "$BG")
     [ -n "$THRESHOLD" ] && gate_args+=(--threshold "$THRESHOLD")
     [ -n "$FRESHNESS" ] && gate_args+=(--freshness "$FRESHNESS")
     verdict=$(node "$GATE" "${gate_args[@]}" 2>/dev/null) || { log "skip  $sid  gate errored"; continue; }
@@ -90,7 +153,21 @@ while :; do
       if is_descendant "$pane_pid" "$pp"; then pane="$loc"; break; fi
     done < <(tmux list-panes -a -F '#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
     if [ -z "$pane" ]; then
-      log "skip  $sid  ELIGIBLE but no tmux pane hosts pid ${pane_pid:-?} — no writer path"
+      label="$(fleet_label_for_pid "$pane_pid")"
+      if [ -n "$label" ]; then
+        if [ "$DRY" = "1" ]; then
+          log "dry   $sid  ELIGIBLE — would owner-write /clear to fleet agent $label"
+          continue
+        fi
+        log "FIRE  $sid  /clear → fleet owner-write to $label (all gates held)"
+        if fleet_write_clear "$label"; then
+          log "sent  $sid  owner-write delivered to $label"
+        else
+          log "skip  $sid  owner-write FAILED for $label"
+        fi
+        continue
+      fi
+      log "skip  $sid  ELIGIBLE but no tmux pane hosts pid ${pane_pid:-?} and no fleet agent holds it — no writer path"
       continue
     fi
     if [ "$DRY" = "1" ]; then

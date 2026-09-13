@@ -15,12 +15,18 @@
 #   source this block near the top of ~/.claude/statusline.sh (or a project statusline),
 #   or paste the three command lines. It must not slow the render: one jq, one atomic mv.
 #
-#   tokens_file="${CLAUDE_PROJECT_DIR:-$PWD}/.set/handoff/.context-tokens"
+#   session8=$(printf '%s' "$session_id" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
+#   tokens_file="${CLAUDE_PROJECT_DIR:-$PWD}/.set/handoff/.context-tokens${session8:+-$session8}"
 #   total_input=$(printf '%s' "$input" | jq -r '.context_window.total_input_tokens // empty')
 #   [ -n "$total_input" ] && printf '{"totalInputTokens":%s,"updatedAt":"%s"}\n' \
 #     "$total_input" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tokens_file.tmp" 2>/dev/null \
 #     && mkdir -p "$(dirname "$tokens_file")" && mv "$tokens_file.tmp" "$tokens_file"
 #
 # NOTE: `$input` is the statusline's stdin JSON variable, as in your existing script.
+# NOTE (9.3, 2026-09-13): the file is PER-SESSION — `.context-tokens-<first8ofsessionid>` —
+# because the shared name let two sessions in one repo overwrite each other's numbers
+# (measured in the armed consumer night: session B read session A's 474k+ as its own).
+# The gate reads the per-session file first; the shared name is only read when the stdin
+# carries no session id. Keep `$session_id` (`.session_id` from the same stdin JSON).
 # NOTE: the null/zero window right after a /clear is handled by the gate, not here: it reads
 # this file together with its timestamp, and treats stale or unknown as not-eligible.

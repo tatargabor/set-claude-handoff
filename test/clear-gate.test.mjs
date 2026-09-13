@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { armMarker, evaluate, readTokens } from "../templates/clear-gate.mjs"
+import { armMarker, evaluate, readTokens, sessionStartAt } from "../templates/clear-gate.mjs"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "gate-"))
 
@@ -97,4 +97,59 @@ test("backgroundWorkBlocks=true blocks unless the armed handoff declares 'none' 
   writeFileSync(join(dir, "0912-aaaa--thread.md"), "# handoff — background state not stated anywhere\n")
   const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr, backgroundWorkBlocks: true })
   assert.equal(res.eligible, false, "an unresolvable declaration is not a 'none'")
+})
+
+test("a stale statusline file must not starve the transcript fallback — the short-circuit starved 1061 of 1742 armed-night verdicts (2026-09-13)", () => {
+  const dir = tmp()
+  const f = join(dir, ".context-tokens")
+  writeFileSync(f, JSON.stringify({ totalInputTokens: 900000, updatedAt: new Date(Date.now() - 3600_000).toISOString() }))
+  const tr = join(dir, "t.jsonl")
+  GOOD_TRANSCRIPT(tr)
+  const tok = readTokens({ tokensFile: f, transcriptPath: tr, freshnessSec: 300 })
+  assert.equal(tok.source, "transcript-fallback", "a stale candidate falls through; the session's own transcript decides")
+  assert.equal(tok.tokens, 500_030)
+})
+
+test("a session must never arm from the shared token file — two sessions in one repo overwrote each other's numbers (9.3)", () => {
+  const dir = tmp()
+  // A FRESH shared file, but its number belongs to ANOTHER session's statusline render.
+  writeFileSync(join(dir, ".context-tokens"), JSON.stringify({ totalInputTokens: 900_000, updatedAt: new Date().toISOString() }))
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: null, backgroundWorkBlocks: false })
+  const tokens = res.gates.find((g) => g.name === "tokens")
+  assert.equal(tokens.ok, false, "another session's fresh number is still not THIS session's number")
+})
+
+test("the session's own per-session token file arms the gate — the 9.3 fix direction", () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".context-tokens-aaaaaaaa"), JSON.stringify({ totalInputTokens: 600_000, updatedAt: new Date().toISOString() }))
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: null, backgroundWorkBlocks: false })
+  const tokens = res.gates.find((g) => g.name === "tokens")
+  assert.equal(tokens.ok, true)
+  assert.match(tokens.detail, /statusline/)
+})
+
+test("the start check must find the runtime's own <pid>.json — the old dot-filter skipped every record file", () => {
+  const home = mkdtempSync(join(tmpdir(), "home-"))
+  const sessions = join(home, ".claude", "sessions")
+  mkdirSync(sessions, { recursive: true })
+  writeFileSync(join(sessions, "3014805.json"), JSON.stringify({ sessionId: "9adce541-c3d3", startedAt: 1000 }))
+  writeFileSync(join(sessions, "3014805.deadbeef.key"), "noise")
+  const prev = process.env.HOME
+  process.env.HOME = home
+  try {
+    assert.equal(sessionStartAt("9adce541-c3d3"), 1000)
+  } finally { process.env.HOME = prev }
+})
+
+test("a restored process must not disown the session's marker — identity is the id, the earliest start wins", () => {
+  const home = mkdtempSync(join(tmpdir(), "home-"))
+  const sessions = join(home, ".claude", "sessions")
+  mkdirSync(sessions, { recursive: true })
+  writeFileSync(join(sessions, "1.json"), JSON.stringify({ sessionId: "9adce541-c3d3", startedAt: 1000 }))
+  writeFileSync(join(sessions, "2.json"), JSON.stringify({ sessionId: "9adce541-c3d3", startedAt: 9000 }))
+  const prev = process.env.HOME
+  process.env.HOME = home
+  try {
+    assert.equal(sessionStartAt("9adce541-c3d3"), 1000)
+  } finally { process.env.HOME = prev }
 })

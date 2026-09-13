@@ -10,15 +10,23 @@
  * the gate and the contract; the environment ships the keystrokes.
  *
  * Gates, all of which must hold (any failure ⇒ not eligible, and the reason is named):
- *   1. tokens     — context size ≥ threshold. Source order: the statusline-persisted file
- *                   (documented `context_window.total_input_tokens`) if fresher than the
- *                   freshness bound, else the transcript's last usage triple (works, but the
- *                   transcript format is officially unstable — this is the FALLBACK, not the
- *                   source). Unknown ⇒ not eligible: unknown must never read as above-threshold.
- *   2. marker     — `.written-<session8>` exists in the handoff dir, is well-formed, and its
- *                   mtime postdates the session's start (from ~/.claude/sessions/<pid>.json,
- *                   the runtime's own record). Another session's marker must not arm THIS
- *                   session; session identity is the id, never "a handoff exists".
+ *   1. tokens     — context size ≥ threshold. Source order: the session's OWN statusline-
+ *                   persisted file (`.context-tokens-<session8>`, documented
+ *                   `context_window.total_input_tokens`) if fresher than the freshness bound,
+ *                   else the transcript's last usage triple (works, but the transcript format
+ *                   is officially unstable — this is the FALLBACK, not the source). A stale
+ *                   file also falls through to the transcript — measured 2026-09-13: returning
+ *                   "stale" instead starved 1061 of 1742 armed-night verdicts while the
+ *                   transcripts held the true numbers. No session id ⇒ the legacy shared
+ *                   `.context-tokens` (pre-9.3 shape). Unknown ⇒ not eligible: unknown must
+ *                   never read as above-threshold.
+ *   2. marker     — `.written-<session8>` exists in the handoff dir: per-session-id by
+ *                   construction, so another session's marker can never arm THIS session
+ *                   (session identity is the id, never "a handoff exists"). The session's
+ *                   start (from ~/.claude/sessions/<pid>.json, earliest record wins — a fleet
+ *                   restore keeps the id and restarts the process) is reported in the detail,
+ *                   not enforced: blocking a restored thread from its own armed handoff was
+ *                   measured harmful on 2026-09-13.
  *   3. idle       — transcript tail has no unanswered user message and no tool_use without its
  *                   tool_result. A tool awaiting a PERMISSION decision also has no result yet,
  *                   so a pending prompt fails this gate — which is load-bearing: a dialog
@@ -64,23 +72,32 @@ export function armMarker(handoffDir, sessionId, handoffFile, { passed = true, n
   return { wrote: true, path }
 }
 
-/** Live context size: persisted statusline value when fresh, else transcript fallback. */
-export function readTokens({ tokensFile, transcriptPath, freshnessSec = DEFAULT_FRESHNESS_SEC, now = Date.now() } = {}) {
-  if (tokensFile && existsSync(tokensFile)) {
+/**
+ * Live context size: the first FRESH statusline-persisted candidate, else the transcript
+ * fallback. A stale candidate is remembered ("statusline-stale" is only reported when nothing
+ * else pans out) — it must not SHORT-CIRCUIT the fallback: measured 2026-09-13 in the armed
+ * consumer night, a returning-early "stale" starved 1061 of 1742 verdicts while the sessions'
+ * own transcripts held the true ~528k.
+ */
+export function readTokens({ tokensFile, tokensFiles, transcriptPath, freshnessSec = DEFAULT_FRESHNESS_SEC, now = Date.now() } = {}) {
+  const candidates = tokensFiles ?? (tokensFile ? [tokensFile] : [])
+  let sawStale = false
+  for (const path of candidates) {
+    if (!path || !existsSync(path)) continue
     try {
-      const rec = JSON.parse(readFileSync(tokensFile, "utf8"))
+      const rec = JSON.parse(readFileSync(path, "utf8"))
       const ageSec = (now - Date.parse(rec.updatedAt)) / 1000
       if (Number.isFinite(rec.totalInputTokens) && ageSec <= freshnessSec) {
         return { tokens: rec.totalInputTokens, source: "statusline", ageSec }
       }
-      return { tokens: null, source: "statusline-stale", ageSec }
-    } catch { /* fall through to the transcript fallback */ }
+      sawStale = true
+    } catch { /* a corrupt candidate falls to the next source */ }
   }
   if (transcriptPath && existsSync(transcriptPath)) {
     const t = tokensFromTranscript(transcriptPath)
     if (t != null) return { tokens: t, source: "transcript-fallback", ageSec: null }
   }
-  return { tokens: null, source: "unknown", ageSec: null }
+  return { tokens: null, source: sawStale ? "statusline-stale" : "unknown", ageSec: null }
 }
 
 /** Last usage triple in the transcript — the formula context-guard has run in production. */
@@ -98,18 +115,29 @@ export function tokensFromTranscript(path) {
   return null
 }
 
-/** Session start time from the runtime's own record (~/.claude/sessions/<pid>.json). */
+/**
+ * Session start time from the runtime's own records (~/.claude/sessions/<pid>.json).
+ * Two measured bugs lived here (fixed 2026-09-13):
+ * - the old filter skipped any file whose NAME contains a dot — true of every `<pid>.json` —
+ *   so the marker gate's start check NEVER ran (it announced the skip and passed on presence);
+ * - a fleet restore restarts the PROCESS but keeps the session id, so matching any single
+ *   record is arbitrary. The session's birth is the EARLIEST start among its records: identity
+ *   is the id, never the process, and a restored session must not disown its own marker.
+ */
 export function sessionStartAt(sessionId) {
   const dir = join(process.env.HOME ?? "", ".claude", "sessions")
   if (!existsSync(dir)) return null
+  let earliest = null
   for (const f of readdirSync(dir)) {
-    if (!f.endsWith(".json") || f.includes(".")) continue // skip .key files
+    if (!f.endsWith(".json")) continue // skips the <pid>.<hash>.key files too
     try {
       const rec = JSON.parse(readFileSync(join(dir, f), "utf8"))
-      if (rec.sessionId === sessionId) return rec.startedAt ?? null
+      if (rec.sessionId === sessionId && Number.isFinite(rec.startedAt)) {
+        earliest = earliest == null ? rec.startedAt : Math.min(earliest, rec.startedAt)
+      }
     } catch { /* a malformed record is not ours to fix */ }
   }
-  return null
+  return earliest
 }
 
 /** Idle: no unanswered user message, no tool_use left without its tool_result. */
@@ -149,27 +177,39 @@ export function evaluate(opts = {}) {
   const dir = resolve(opts.dir ?? ".set/handoff")
   const sessionId = opts.sessionId ?? ""
   const s8 = session8(sessionId)
-  const tokensFile = opts.tokensFile ?? join(dir, ".context-tokens")
+  // Per-session token file first (9.3: two sessions in one repo overwrote the shared file and
+  // read each other's numbers). The shared name is read only when no session id exists —
+  // a number from ANOTHER session's file must never arm THIS session.
+  const tokensFiles = opts.tokensFile
+    ? [opts.tokensFile]
+    : (s8 === "ismeretlen" ? [join(dir, ".context-tokens")] : [join(dir, `.context-tokens-${s8}`)])
   const transcriptPath = opts.transcriptPath ?? null
 
   const gates = []
   const add = (name, ok, detail) => gates.push({ name, ok, detail })
 
   // 1. tokens
-  const tok = readTokens({ tokensFile, transcriptPath, freshnessSec })
+  const tok = readTokens({ tokensFiles, transcriptPath, freshnessSec })
   add("tokens", tok.tokens != null && tok.tokens >= threshold,
     tok.tokens == null ? `unknown (source: ${tok.source})` : `${tok.tokens} ≥ ${threshold} via ${tok.source} (${Math.round(tok.ageSec ?? -1)}s old)`)
 
-  // 2. marker — this session's own, fresh
+  // 2. marker — this session's own. The s8 suffix makes it per-session-id (another session's
+  //    marker never matches); the start comparison stays as ANNOUNCEMENT only: measured
+  //    2026-09-13, a fleet RESTORE keeps the session id and restarts the process, so the
+  //    thread's own marker predates the new start — blocking on that starved the restored
+  //    thread of exactly its own armed handoff.
   const markerPath = join(dir, MARKER_PREFIX + s8)
   let markerOk = false, markerDetail = "no marker for this session"
   if (s8 === "ismeretlen") markerDetail = "no session id given"
   else if (existsSync(markerPath)) {
+    markerOk = true
     const startAt = sessionStartAt(sessionId)
     const mtime = statSync(markerPath).mtimeMs
-    if (startAt == null) { markerOk = true; markerDetail = "marker present (session record not found — start check skipped, announced)" }
-    else if (mtime >= startAt) { markerOk = true; markerDetail = "marker present, postdates session start" }
-    else markerDetail = "marker predates this session's start (stale from another session)"
+    markerDetail = startAt == null
+      ? "marker present (session record not found — start check skipped, announced)"
+      : mtime >= startAt
+        ? "marker present, postdates session start"
+        : "marker present — predates the process start: a restored process of the SAME session id, armed from its own thread"
   }
   add("marker", markerOk, markerDetail)
 
