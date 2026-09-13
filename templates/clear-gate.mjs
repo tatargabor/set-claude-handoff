@@ -36,6 +36,10 @@
  *                   background work via BACKGROUND_NONE_PATTERN; unresolvable ⇒ blocked
  *                   (fail-closed: an unreadable declaration is not a "none"). Relax only with
  *                   the pilot's recorded measurement (task 6.4 of the change).
+ *   5. optout     — `.no-autoclear-<session8>` in the handoff dir blocks the clear whatever
+ *                   else holds. This is the kill switch for "disable auto-clear for THIS
+ *                   session": the user creates it, or asks the agent to, and the gate obeys —
+ *                   an agent's verbal promise cannot disable the watcher, a marker file can.
  *
  * Usage:
  *   node clear-gate.mjs [--session <id>] [--threshold N] [--freshness SEC]
@@ -233,6 +237,12 @@ export function evaluate(opts = {}) {
     }
   }
   add("background", bgOk, bgDetail)
+
+  // 5. optout — per-session kill switch; presence blocks regardless of everything else.
+  const optedOut = s8 !== "ismeretlen" && existsSync(join(dir, `.no-autoclear-${s8}`))
+  add("optout", !optedOut, optedOut
+    ? `opt-out present (.no-autoclear-${s8}) — auto-clear disabled for this session`
+    : "no opt-out")
 
   const eligible = gates.every((g) => g.ok)
   return { eligible, sessionId: s8, threshold, gates, at: new Date().toISOString() }
