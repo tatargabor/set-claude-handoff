@@ -38,6 +38,8 @@ init writes:
   .claude/hooks/watch-auto-clear.sh         the executor (run it under tmux / systemd)
   .claude/hooks/presence.mjs                the executor's is-a-human-typing check
   .claude/hooks/turn-state.mjs              the executor's is-a-turn-running check + submit confirm
+  .claude/hooks/handoff-arm.mjs             arms a session when it writes a passing handoff (PostToolUse)
+  .claude/hooks/keep-going.mjs              opt-in: never stop without a real question; handoff at the limit
 
 --autopilot additionally writes (package-owned, overwritten on re-run):
   .claude/hooks/autopilot/*.mjs             intent ledger, capture + answer hooks, drift guard
@@ -133,7 +135,7 @@ function installAutoClear({ target, cwd, log }) {
   // measured 10:03:50Z typing collision) only reaches a consumer if init ships the watcher too.
   // turn-state.mjs likewise: the watcher exits at start without it, so an init that forgot it
   // (measured 2026-09-21) upgraded a consumer into a watcher that cannot run.
-  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs", "turn-state.mjs"]) {
+  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs", "turn-state.mjs", "handoff-arm.mjs", "keep-going.mjs"]) {
     const src = join(PKG_ROOT, "templates", f)
     const dst = join(hooksDir, f.split("/").pop())
     writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
@@ -145,6 +147,19 @@ Next, merge YOURSELF (init never touches these — they are consumer-owned):
 1. .claude/settings.json — add to "hooks"."SessionStart" (merge with existing matchers):
      { "matcher": "clear|compact", "hooks": [ { "type": "command",
          "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/handoff-reinject-clear.mjs\\"", "timeout": 15 } ] }
+
+   and to "hooks"."PostToolUse" — the arming hook (skip it if the project has its own):
+     { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [ { "type": "command",
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/handoff-arm.mjs\\"", "timeout": 10 } ] }
+
+   OPTIONAL — keep-going (the session stops only on a line starting NEED INPUT: or ALL DONE:,
+   and writes the handoff itself at the limit; off again with: touch .set/handoff/.no-keepgoing):
+     "Stop":        [ { "hooks": [ { "type": "command",
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" stop --threshold 500000 --max 40", "timeout": 10 } ] } ]
+     "PostToolUse": [ { "matcher": "*", "hooks": [ { "type": "command",
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" post --threshold 500000", "timeout": 10 } ] } ]
+   Keep --threshold equal to the watcher's (default 500000), and start the watcher with
+   --auto-continue default so the cleared session is re-prompted.
 
 2. Your statusline (~/.claude/statusline.sh) — paste the fragment from
    templates/statusline-persist.sh so .set/handoff/.context-tokens gets the live token count.

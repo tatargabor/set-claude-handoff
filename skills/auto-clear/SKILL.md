@@ -53,13 +53,21 @@ it you use the defaults and SAY so.
      have its own — merge, never overwrite).
    - the statusline fragment (`templates/statusline-persist.sh`) — per-session token file.
    Verify each with a grep, and SAY which are wired and which are still manual.
+   - PostToolUse `Write|Edit|MultiEdit|Bash` → `.claude/hooks/handoff-arm.mjs` — the ARMING hook,
+     unless the project already has its own. Without one, no session is ever cleared (the gate
+     logs `marker: no marker for this session` for ever).
+   - **keep-going (optional, ask the user):** Stop → `keep-going.mjs stop --threshold <T> --max 40`
+     and PostToolUse `*` → `keep-going.mjs post --threshold <T>` (exact JSON: `init` prints it). The
+     session then stops only on a line starting `NEED INPUT:` or `ALL DONE:`, and writes its own
+     handoff at the limit. Off: `touch .set/handoff/.no-keepgoing` (or `.no-keepgoing-<session8>`).
+     Its decisions are in `.set/handoff/keep-going.log`.
 3. **Watcher**: if none is running for this tree, start one under tmux (or the fleet owner):
    ```bash
    tmux new-session -d -s auto-clear-watcher \
      "bash $PWD/.claude/hooks/watch-auto-clear.sh --dir $PWD \
       --started-after $(date -u +%Y-%m-%dT%H:%M:%SZ) --interval 60 \
       --background-work-blocks <from profile, default true> \
-      --auto-continue '<from profile, default off>'"
+      --auto-continue '<from profile, or: default>'"
    ```
    `--started-after now` matters: only sessions started after the reload wiring exists may
    ever be cleared. For reboot survival, install a `systemd --user` unit running the same
@@ -69,6 +77,14 @@ it you use the defaults and SAY so.
    run the gate once by hand (`node .claude/hooks/clear-gate.mjs --session <any live id> …
    --json`) and show the 5-gate verdict. Report: threshold, which writer paths exist
    (tmux / fleet owner), auto-continue on/off, both switch states.
+
+### macOS
+
+Works on macOS since `d7f40c4` (no `/proc`, no GNU `date`). Needs `node`, `jq` and `tmux`, and
+**Claude must run inside tmux** — on a Mac the tmux pane is the only way the watcher can type.
+There is no systemd: keep the watcher in its own tmux session (as above), or use a launchd agent
+for reboot survival. First run: add `--dry-run` and read the log — `dry … ELIGIBLE — would /clear
+pane …` proves the session records and the pane lookup work on that machine.
 
 ## 3. OFF (argument `off`)
 

@@ -135,6 +135,25 @@ the gate refuses to clear that session whatever else holds. Delete the file to r
 agent in that session to create it for you; a verbal "don't clear me" without the file binds
 nothing.
 
+## Keep going (opt-in)
+
+For an unattended session: it does not stop until it has a real reason to, and at the context
+limit it writes its own handoff, so auto-clear can clear it and continue it from there.
+
+- `keep-going.mjs stop` (Stop hook) blocks an ordinary stop with "continue with the next step".
+  A stop goes through only on a line starting `NEED INPUT:` (a decision nothing earlier answers)
+  or `ALL DONE:`, while background tasks run, or when the kill switch
+  `.set/handoff/.no-keepgoing` exists. A question like "Want me to push?" does **not** stop it.
+- At the threshold it asks for the handoff instead (Write/Edit, never Bash), and once the sheet
+  is armed it lets the stop through, so the watcher can clear.
+- A budget (`--max`, default 40) counts its own nudges since the last human prompt and stops the
+  chain when spent. Its nudges are `isMeta` in the transcript, so they never reset it.
+- `handoff-arm.mjs` (PostToolUse) is what arms a session: it writes `.written-<session8>` when
+  a handoff sheet with every section lands, through Write/Edit or a Bash write.
+
+`init --auto-clear` installs both; it prints the `settings.json` entries to merge. Every
+decision is logged in `.set/handoff/keep-going.log`.
+
 ## Autopilot (opt-in)
 
 On top of the automatic clear: keep an unattended thread on the course its human set, and stop it
