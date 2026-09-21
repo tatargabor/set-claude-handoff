@@ -185,6 +185,13 @@ The file: `.set/handoff/$ID--<slug>.md` (`<slug>` = the thread's name in kebab-c
 section with a "none" marker too, because a missing section and missing content look identical
 from the outside:
 
+**Write the file with the Write or Edit tool — never with Bash** (`cat > … <<EOF`, `cp`, `sed -i`,
+`tee`). The hooks that act on a handoff (its content check, and under auto-clear the marker that
+arms this session for an automatic `/clear`) are PostToolUse hooks on Write/Edit. A shell write
+passes them by in silence: measured 2026-09-21, a sheet written with a heredoc left its session
+unarmed, and the watcher refused to clear it every minute while the session sat at "Ready for
+/clear". The shell is fine for READING the previous version, never for writing this one.
+
 ```markdown
 # HANDOFF: <slug> — <ISO date from the `date` command>   ·   ID: <ID>
 

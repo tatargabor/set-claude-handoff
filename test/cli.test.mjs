@@ -150,4 +150,5 @@ test("init --auto-clear ships the watcher and its presence check — the 10:03:5
   assert.ok(exists(watcher))
   assert.ok(statSync(watcher).mode & 0o111, "the watcher must be executable")
   assert.ok(exists(join(dir, ".claude/hooks/presence.mjs")), "the watcher refuses to start without its presence check")
+  assert.ok(exists(join(dir, ".claude/hooks/turn-state.mjs")), "the watcher refuses to start without its turn-state check")
 })

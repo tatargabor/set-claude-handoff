@@ -37,6 +37,7 @@ init writes:
   .claude/hooks/handoff-reinject-clear.mjs  SessionStart(clear|compact) reload
   .claude/hooks/watch-auto-clear.sh         the executor (run it under tmux / systemd)
   .claude/hooks/presence.mjs                the executor's is-a-human-typing check
+  .claude/hooks/turn-state.mjs              the executor's is-a-turn-running check + submit confirm
 
 --autopilot additionally writes (package-owned, overwritten on re-run):
   .claude/hooks/autopilot/*.mjs             intent ledger, capture + answer hooks, drift guard
@@ -130,7 +131,9 @@ function installAutoClear({ target, cwd, log }) {
   mkdirSync(hooksDir, { recursive: true })
   // The executor and its presence check travel with the gate: the watcher's presence gate (the
   // measured 10:03:50Z typing collision) only reaches a consumer if init ships the watcher too.
-  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs"]) {
+  // turn-state.mjs likewise: the watcher exits at start without it, so an init that forgot it
+  // (measured 2026-09-21) upgraded a consumer into a watcher that cannot run.
+  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs", "turn-state.mjs"]) {
     const src = join(PKG_ROOT, "templates", f)
     const dst = join(hooksDir, f.split("/").pop())
     writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
