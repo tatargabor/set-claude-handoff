@@ -129,3 +129,25 @@ test("init installs the auto-clear switchboard skill alongside the handoff skill
   await cmdInit({ cwd: dir, log: silent })
   assert.match(readFileSync(join(dir, ".claude/skills/auto-clear/SKILL.md"), "utf8"), /name: auto-clear/)
 })
+
+test("init --autopilot installs the whole hook directory — every hook imports ./ledger.mjs, so a partial install breaks them all at load", async () => {
+  const { existsSync: exists } = await import("node:fs")
+  const dir = project()
+  await cmdInit({ cwd: dir, autopilot: true, log: silent })
+  for (const f of ["ledger.mjs", "validate.mjs", "judge.mjs", "drift-guard.mjs", "capture-prompt.mjs", "capture-answer.mjs", "answer-dialog.mjs", "answer-stop.mjs"]) {
+    assert.ok(exists(join(dir, ".claude/hooks/autopilot", f)), f)
+  }
+  assert.match(readFileSync(join(dir, ".claude/skills/autopilot/SKILL.md"), "utf8"), /^---\nname: autopilot\n/)
+  assert.ok(!exists(join(dir, ".claude/settings.json")), "settings.json is consumer-owned — init prints the merge, never performs it")
+  assert.doesNotMatch(readFileSync(join(dir, ".claude/handoff.profile.md"), "utf8"), /## Autopilot/, "the profile is project-owned")
+})
+
+test("init --auto-clear ships the watcher and its presence check — the 10:03:50Z typing-collision fix must reach consumers", async () => {
+  const { existsSync: exists, statSync } = await import("node:fs")
+  const dir = project()
+  await cmdInit({ cwd: dir, autoClear: true, log: silent })
+  const watcher = join(dir, ".claude/hooks/watch-auto-clear.sh")
+  assert.ok(exists(watcher))
+  assert.ok(statSync(watcher).mode & 0o111, "the watcher must be executable")
+  assert.ok(exists(join(dir, ".claude/hooks/presence.mjs")), "the watcher refuses to start without its presence check")
+})

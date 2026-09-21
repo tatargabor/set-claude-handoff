@@ -113,7 +113,9 @@ the measured state, installs the machinery, starts the watcher with the profile'
 verifies the log before calling it armed. Two kill-switch scopes, both plain files in
 `.set/handoff/`: `.no-autoclear` (whole tree) and `.no-autoclear-<session8>` (one session).
 
-`init --auto-clear` also installs two hook templates: **`clear-gate`** — decides whether a session may be
+`init --auto-clear` also installs the executor (`watch-auto-clear.sh`) with its **presence check**
+(`presence.mjs`: it reads the session's input line and never types into text a human is writing — the
+fix for a measured collision where `/clear` landed inside a half-typed line), and two hook templates: **`clear-gate`** — decides whether a session may be
 cleared automatically (context ≥ threshold, this session's own handoff marker, idle, no pending prompt,
 background-work policy), and **`handoff-reinject-clear`** — a `SessionStart` hook (`clear` | `compact`)
 that reloads the latest handoff into the fresh context as pointer + preview. The gate never clears; an
@@ -132,6 +134,45 @@ Fires only after automatic clears, never manual ones.
 the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the
 agent in that session to create it for you; a verbal "don't clear me" without the file binds
 nothing.
+
+## Autopilot (opt-in)
+
+On top of the automatic clear: keep an unattended thread on the course its human set, and stop it
+from waiting on questions the human already answered. Arm it with `/autopilot` (installed by
+`init --autopilot`).
+
+**The intent ledger.** A record of what the *human* said to one work thread — typed prompts, dialog
+picks, dictation — captured by hooks at the moment it happens and keyed by the handoff ID, so it
+survives every clear. It cannot be read back from the transcript: a prompt the watcher typed and an
+answer a hook supplied are recorded there exactly like the human's own. So executors log what they
+type before typing it, and machine-authored entries are never evidence. Dictation reaches the
+ledger in one of two shapes: **file** — set-copilot's archived `.set/copilot/<session>/dictation-*.jsonl`
+is picked up by the hooks (one entry per finished dictation, mid-word segments joined exactly); or
+**command** — any adapter runs `node .claude/hooks/autopilot/ledger.mjs append --source human-dictated
+--session <id> --text-file <file>` (the CLI accepts no other source). A session with neither is
+announced in the verdict log, never read as "the human said nothing".
+
+**Drift guard.** After an automatic clear the continue prompt is sent only when the fresh session
+reloaded *its own* thread (a reload chosen by file age binds nothing), the silence budget is not
+spent (default: 3 automatic continuations since the last human input), and — with a judge
+configured — the handoff's next step is still aligned with the human's words. The reload also
+injects the thread's human direction verbatim, beside the handoff preview.
+
+**Auto-answer.** A question dialog, a prose question, a "done, what next?" or a wait on background
+work is answered only when a verbatim quote of the human's recorded words in this thread backs the
+answer — checked deterministically, whatever the judge claims. Never answered: a new decision, a
+handoff §3 user-decision item, a deny-listed action (push, deploy, delete, send to a client,
+publish, pay), an unbound session, a spent budget. Every answer says it is automatic and quotes
+what it relied on; every stop is logged to `.set/handoff/autopilot.log`, answered or not.
+
+**Switching it off and on — any time, from the prompt.** A line starting with `autopilot off` (or
+`autopilot ki`) switches it off for the session, `autopilot off project` for the whole tree;
+`autopilot on` / `autopilot be` switches it back. A hook applies it before the agent's turn, so no
+agent can overrule it, and text the watcher typed can never flip it. The switch files are
+`.set/handoff/.no-autopilot` and `.no-autopilot-<session8>`, independent of the auto-clear ones.
+
+Verify a Claude Code upgrade with `templates/selftest-autopilot.sh`: it pins the platform behaviors
+the hooks rely on. Evidence and design: `docs/investigations/2026-09-13-thread-anchor-and-auto-answer.md`.
 
 ## Related
 

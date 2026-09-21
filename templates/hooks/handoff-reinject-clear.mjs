@@ -24,6 +24,7 @@
  * break the session's start; failure is announced in-chat or silent, never fatal.
  */
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execFileSync } from "node:child_process"
@@ -34,6 +35,25 @@ const MAX_MANUAL = 7_000          // manual handoff preview budget
 const MAX_AUTO = 2_300            // machine page budget (with headers, stays under the cap)
 const DEDUP_WINDOW_MS = 120_000   // same-event double-fire guard — time-boxed, never permanent
 const MARKER_PREFIX = ".written-" // same convention as the clear-gate's arm marker
+const CLEAR_LINK_MS = 300_000     // how far back the watcher's typed /clear record may be
+
+/**
+ * Autopilot, optional (specs: intent-ledger, drift-guard). When the ledger module is installed
+ * next to this hook (`./autopilot/`, or `../autopilot/` in the package tree), a clear records HOW
+ * its handoff was chosen, binds the fresh session to the thread only for a marker-chosen reload,
+ * and a bound session also receives the human's own words beside the handoff preview. Without
+ * autopilot installed this hook behaves exactly as before.
+ */
+async function loadAutopilot() {
+  for (const rel of ["./autopilot/ledger.mjs", "../autopilot/ledger.mjs"]) {
+    const url = new URL(rel, import.meta.url)
+    if (existsSync(fileURLToPath(url))) {
+      try { return await import(url.href) } catch { return null }
+    }
+  }
+  return null
+}
+const AP = await loadAutopilot()
 
 function readEvent() {
   try { return JSON.parse(readFileSync(0, "utf8")) } catch { return {} }
@@ -78,10 +98,11 @@ function markerChoice(dirs, s8) {
   return null
 }
 
-export function buildInjection({ dir, source, now = Date.now(), sessionId = "" }) {
+export function buildInjection({ dir, source, now = Date.now(), sessionId = "", prevSessionId = "" }) {
   if (source !== "clear" && source !== "compact") return null // per-event allowlist
 
   const s8 = session8(sessionId)
+  const prev8 = prevSessionId ? session8(prevSessionId) : null
   const dirs = candidateHandoffDirs(dir).filter((d) => existsSync(d))
 
   if (dirs.length === 0) return source === "clear"
@@ -94,7 +115,13 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "" }
   // MEASURED harmful on 2026-09-13: the bugfix pane (cwd = main tree, no marker reachable by
   // its fresh id) got a sibling worktree's newer page as its reload. Other trees' pages stay
   // REACHABLE — listed by full path — but never become the primary choice by recency.
-  const marked = markerChoice(dirs, s8)
+  //
+  // After a clear the fresh session has a NEW id, so its own marker cannot exist yet. For an
+  // AUTOMATIC clear the watcher logged which session it cleared (probe M3, 2.1.270: the platform
+  // offers no pointer to the predecessor) — that session's marker names the thread's handoff.
+  const ownMarked = markerChoice(dirs, s8)
+  const prevMarked = !ownMarked && source === "clear" && prev8 ? markerChoice(dirs, prev8) : null
+  const marked = ownMarked ?? prevMarked
 
   // Manual handoffs (not the machine `--allapot.md` pages) — all trees, newest first, for
   // the listing; the fallback CHOICE below reads only the cwd's own tree.
@@ -107,6 +134,29 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "" }
   const homeManual = manual.filter((k) => k.dir === dir)
   const chosen = marked ?? (homeManual[0] ? { dir: homeManual[0].dir, file: homeManual[0].f } : null)
 
+  // Autopilot: record how the handoff was chosen, bind only a marker-chosen reload, and give a
+  // bound session the thread's human direction verbatim. `clear` alone writes the reload record —
+  // a compact keeps the session id and its existing binding.
+  let charter = ""
+  let autopilotNote = ""
+  if (AP && s8 !== "ismeretlen") {
+    const chosenId = chosen ? AP.handoffIdOf(chosen.file) : null
+    if (source === "clear") {
+      AP.writeReload(dir, sessionId, {
+        choice: marked ? "marker" : chosen ? "mtime" : "none", id: chosenId, prev: prev8,
+        markerOf: ownMarked ? "own" : prevMarked ? "previous-session" : null,
+      })
+      if (marked && chosenId) AP.bindSession(dir, sessionId, chosenId)
+    }
+    const thread = AP.threadOf(dir, sessionId)
+    const unbound = !thread.bound || (thread.reload && thread.reload.choice !== "marker")
+    if (!unbound) {
+      charter = AP.charterBlock(AP.readThread(dir, thread.id), AP.loadConfig(dirname(dirname(dir))).charterChars)
+    } else if (source === "clear") {
+      autopilotNote = `⚠ Autopilot: this session is NOT bound to a thread (${thread.via}) — no automatic continuation and no automatic answers until a human loads a handoff with \`/handoff <ID>\`.`
+    }
+  }
+
   const parts = []
   let used = 0
 
@@ -115,19 +165,23 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "" }
     let body = ""
     try { body = readFileSync(p, "utf8") } catch { body = null }
     const shown = chosen.dir === dir ? `.set/handoff/${chosen.file}` : p
-    const reason = marked
+    const reason = ownMarked
       ? "chosen by THIS session's own arm marker — the thread you wrote before the clear"
-      : "chosen as newest by mtime — in a parallel-session tree, verify it is YOURS"
+      : prevMarked
+        ? "chosen by the arm marker of the session this automatic clear replaced — the thread written before the clear"
+        : "chosen as newest by mtime — in a parallel-session tree, verify it is YOURS"
     const others = manual.filter((k) => !(k.dir === chosen.dir && k.f === chosen.file))
     parts.push([
       `## ⚠ Fresh context — handoff reloaded (${source})`,
       "",
       `**Handoff: \`${shown}\`** (${reason}).`,
       others.length > 0 ? `Other live handoffs: ${others.slice(0, 6).map((k) => (k.dir === dir ? `.set/handoff/${k.f}` : join(k.dir, k.f))).join(", ")}.` : "",
+      autopilotNote,
+      charter,
       "",
       body == null
         ? `⚠ The handoff file exists but is UNREADABLE — open it by hand before working.`
-        : cut(body, Math.min(MAX_MANUAL, MAX_TOTAL - used - 400), p),
+        : cut(body, Math.min(MAX_MANUAL - charter.length, MAX_TOTAL - used - 400 - charter.length), p),
       "",
     ].filter((s) => s !== "").join("\n"))
     used += parts[0].length
@@ -136,6 +190,7 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "" }
       "## ⚠ Fresh context — NOTHING to load",
       "",
       "No handoff exists in this repository or its worktrees. If a work thread was open before the clear, it was not written down; proceed carefully and re-measure state from the repo.",
+      autopilotNote,
       "",
     ].join("\n"))
     used += parts[0].length
@@ -172,10 +227,38 @@ export function sameEventDoubleFire(dedupPath, now = Date.now(), windowMs = DEDU
   return existsSync(dedupPath) && now - statSync(dedupPath).mtimeMs < windowMs
 }
 
+/** The `claude` process this hook runs under: walk the parent chain to a runtime session record. */
+function claudePid() {
+  let p = process.pid
+  for (let i = 0; i < 12 && p > 1; i++) {
+    if (existsSync(join(homedir(), ".claude", "sessions", `${p}.json`))) return p
+    try {
+      const stat = readFileSync(`/proc/${p}/stat`, "utf8")
+      p = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1])
+    } catch { return null }
+  }
+  return null
+}
+
+/**
+ * The session an AUTOMATIC clear replaced. Probe M3 (2.1.270): the SessionStart(clear) payload
+ * carries only the new id, and the runtime record is already rewritten when the hook runs — so
+ * the watcher logs `{kind: "clear", session8, pid}` before it types, and this matches it by the
+ * claude pid. A manual clear has no such record and binds nothing (announced in the injection).
+ */
+export function previousSessionOf(dir, pid, now = Date.now()) {
+  if (!AP || !pid) return ""
+  const rec = AP.readJsonl(join(dir, "typed.jsonl"))
+    .filter((r) => r.kind === "clear" && r.pid === String(pid) && now - Date.parse(r.at) < CLEAR_LINK_MS)
+    .pop()
+  return rec?.session8 ?? ""
+}
+
 function main() {
   const ev = readEvent()
   const dir = process.env.HANDOFF_DIR ?? join(ev.cwd ?? process.cwd(), ".set/handoff")
-  const injection = buildInjection({ dir, source: ev.source, now: Date.now(), sessionId: ev.session_id })
+  const prevSessionId = ev.source === "clear" ? previousSessionOf(dir, claudePid()) : ""
+  const injection = buildInjection({ dir, source: ev.source, now: Date.now(), sessionId: ev.session_id, prevSessionId })
   if (!injection) return
 
   // Same-event double-fire guard: a marker per session+source, honored only inside the window.

@@ -8,7 +8,7 @@
  * A skill upgrade that clobbers the project's probes would make upgrading unsafe, so nobody
  * would upgrade.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -18,9 +18,10 @@ const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8"))
 
 const USAGE = `set-claude-handoff ${VERSION}
 
-  set-claude-handoff init [--global] [--auto-clear]
+  set-claude-handoff init [--global] [--auto-clear] [--autopilot]
                                        install the /handoff skill into this project (or ~/.claude);
                                        --auto-clear also installs the auto-clear hook templates (opt-in)
+                                       --autopilot installs the autopilot hooks + /autopilot skill (opt-in)
                                        (both installs ship the /auto-clear on/off switchboard skill)
   set-claude-handoff --version
   set-claude-handoff help
@@ -34,6 +35,12 @@ init writes:
 --auto-clear additionally writes (package-owned, overwritten on re-run):
   .claude/hooks/clear-gate.mjs              the gate — evaluates, never triggers
   .claude/hooks/handoff-reinject-clear.mjs  SessionStart(clear|compact) reload
+  .claude/hooks/watch-auto-clear.sh         the executor (run it under tmux / systemd)
+  .claude/hooks/presence.mjs                the executor's is-a-human-typing check
+
+--autopilot additionally writes (package-owned, overwritten on re-run):
+  .claude/hooks/autopilot/*.mjs             intent ledger, capture + answer hooks, drift guard
+  .claude/skills/autopilot/SKILL.md         the /autopilot on/off/status switchboard
 and PRINTS the settings.json hook snippet + profile fields for you to merge — init never
 edits settings.json or your statusline (they are yours; a clobbering installer is one
 nobody runs).
@@ -43,7 +50,7 @@ function main(argv) {
   const [cmd = "help", ...rest] = argv
   switch (cmd) {
     case "init":
-      return cmdInit({ global: rest.includes("--global"), autoClear: rest.includes("--auto-clear"), cwd: process.cwd() })
+      return cmdInit({ global: rest.includes("--global"), autoClear: rest.includes("--auto-clear"), autopilot: rest.includes("--autopilot"), cwd: process.cwd() })
     case "--version":
     case "-v":
       console.log(VERSION)
@@ -60,7 +67,7 @@ function main(argv) {
   }
 }
 
-export function cmdInit({ global = false, autoClear = false, cwd = process.cwd(), log = console.log } = {}) {
+export function cmdInit({ global = false, autoClear = false, autopilot = false, cwd = process.cwd(), log = console.log } = {}) {
   const target = global ? join(homedir(), ".claude") : join(cwd, ".claude")
   const skillDir = join(target, "skills", "handoff")
 
@@ -80,6 +87,7 @@ export function cmdInit({ global = false, autoClear = false, cwd = process.cwd()
   log(`${acExisted ? "updated" : "installed"}  ${rel(cwd, acSkillPath)}`)
 
   if (autoClear) installAutoClear({ target, cwd, log })
+  if (autopilot) installAutopilot({ target, cwd, log })
 
   if (global) {
     // The profile describes ONE project's probes, so a user-wide install has nothing to put in
@@ -120,10 +128,12 @@ function rel(cwd, p) {
 function installAutoClear({ target, cwd, log }) {
   const hooksDir = join(target, "hooks")
   mkdirSync(hooksDir, { recursive: true })
-  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs")]) {
+  // The executor and its presence check travel with the gate: the watcher's presence gate (the
+  // measured 10:03:50Z typing collision) only reaches a consumer if init ships the watcher too.
+  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs"]) {
     const src = join(PKG_ROOT, "templates", f)
     const dst = join(hooksDir, f.split("/").pop())
-    writeFileSync(dst, readFileSync(src, "utf8"))
+    writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
     log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
   }
   log(`
@@ -145,6 +155,52 @@ The gate only EVALUATES (exit 0, verdict in stdout/--json); an external executor
 send-keys or the fleet pty owner — reads the verdict and types /clear. See the specs:
 specs/auto-clear (gates) and specs/clear-reload (reload), plus templates/selftest-clear-reload.sh
 for the live check.`)
+  return 0
+}
+
+/**
+ * The autopilot half (opt-in via --autopilot). Every hook imports `./ledger.mjs` and friends, so
+ * the whole directory is installed together — a partial install would break every hook at load.
+ * settings.json and the profile stay consumer-owned: init prints the merge, never performs it.
+ */
+function installAutopilot({ target, cwd, log }) {
+  const apSrc = join(PKG_ROOT, "templates", "autopilot")
+  const apDst = join(target, "hooks", "autopilot")
+  mkdirSync(apDst, { recursive: true })
+  for (const f of readdirSync(apSrc).filter((f) => f.endsWith(".mjs")).sort()) {
+    writeFileSync(join(apDst, f), readFileSync(join(apSrc, f), "utf8"))
+    log(`installed ${rel(cwd, join(apDst, f))}  (package-owned — overwritten on re-run)`)
+  }
+  const skillDir = join(target, "skills", "autopilot")
+  mkdirSync(skillDir, { recursive: true })
+  const skillPath = join(skillDir, "SKILL.md")
+  const existed = existsSync(skillPath)
+  writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "autopilot", "SKILL.md"), "utf8"))
+  log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
+  const hook = (file, extra = "") => `{ "type": "command", "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/autopilot/${file}\\""${extra} }`
+  log(`
+Next, merge YOURSELF (init never touches these — they are consumer-owned):
+
+1. .claude/settings.json — add to "hooks" (merge with the matchers you already have):
+     "UserPromptSubmit": [ { "hooks": [ ${hook("capture-prompt.mjs", `, "timeout": 15`)} ] } ]
+     "PostToolUse":      [ { "matcher": "AskUserQuestion", "hooks": [ ${hook("capture-answer.mjs", `, "timeout": 15`)} ] } ]
+     "PreToolUse":       [ { "matcher": "AskUserQuestion", "hooks": [ ${hook("answer-dialog.mjs", `, "timeout": 120`)} ] } ]
+     "Stop":             [ { "hooks": [ ${hook("answer-stop.mjs", `, "asyncRewake": true, "timeout": 120`)} ] } ]
+
+2. .claude/handoff.profile.md — an "## Autopilot" section with ONE json block (defaults shown;
+   omit the section to run on defaults — the hooks say so in their verdicts):
+     \`\`\`json
+     { "judgeCommand": ["claude", "-p", "--model", "haiku", "--output-format", "json"],
+       "judgeTimeoutSec": 45, "maxAutoContinues": 3, "maxAutoAnswers": 8,
+       "denyList": [], "replaceDefaultDenyList": false, "directivePatterns": [],
+       "charterChars": 1500, "alignment": true, "minQuoteChars": 12 }
+     \`\`\`
+
+3. The auto-clear watcher: restart it with --autopilot, so every automatic continuation runs
+   through .claude/hooks/autopilot/drift-guard.mjs first.
+
+Switch it off any time from a prompt: a line starting with "autopilot off" (or "autopilot ki";
+add "project" for the whole tree). "autopilot on" / "autopilot be" switches it back.`)
   return 0
 }
 
