@@ -5,6 +5,7 @@
  * Two modes, one file:
  *   node keep-going.mjs stop [--threshold N] [--max N]   Stop hook
  *   node keep-going.mjs post [--threshold N]             PostToolUse hook (matcher "*")
+ *   --headless  also act on `claude -p` runs (default: only interactive sessions)
  *
  * THE RULE (user, 2026-09-21): a session keeps working and stops only on a concrete question it
  * cannot answer itself. When it reaches the context limit, it writes a handoff, and the auto-clear
@@ -103,6 +104,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--threshold") o.threshold = Number(argv[++i])
     else if (argv[i] === "--max") o.max = Number(argv[++i])
+    else if (argv[i] === "--headless") o.headless = true
   }
   return o
 }
@@ -134,6 +136,14 @@ async function main(argv) {
   try { ev = JSON.parse(input) } catch { return 0 } // a hook error must never break the work
   if (!ev?.session_id) return 0
   const c = context(ev)
+  // Headless runs are left alone unless --headless: a script's `claude -p` inside the project must
+  // not be pushed through 40 extra turns. Measured 2026-09-21 on 2.1.278: hooks of an interactive
+  // session see CLAUDE_CODE_ENTRYPOINT=cli, hooks of a `claude -p` run see sdk-cli. Absent ⇒ run.
+  const entry = process.env.CLAUDE_CODE_ENTRYPOINT
+  if (entry && entry !== "cli" && !opts.headless) {
+    if (mode === "stop") log(c.dir, `allow ${c.s8}  headless run (entrypoint ${entry}) — pass --headless to keep it going too`)
+    return 0
+  }
 
   if (mode === "post") {
     // An early warning inside a long turn: the Stop check only runs at the END of a turn.

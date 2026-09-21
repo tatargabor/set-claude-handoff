@@ -140,12 +140,15 @@ test("keep-going as a hook: prints a block decision on an ordinary stop, nothing
     { type: "user", uuid: "u1", message: { role: "user", content: "go" } },
     { type: "assistant", message: { content: [{ type: "text", text: "Step 1 done." }], usage: { input_tokens: 10, cache_read_input_tokens: 1000 } } },
   ].map((e) => JSON.stringify(e)).join("\n") + "\n")
-  const run = () => execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
-    input: JSON.stringify({ session_id: "kkkk1111-x", cwd: dir, transcript_path: tr }), encoding: "utf8" })
+  const run = (entry = "cli", extra = []) => execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop", ...extra], {
+    input: JSON.stringify({ session_id: "kkkk1111-x", cwd: dir, transcript_path: tr }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: entry } })
   const out = JSON.parse(run())
   assert.equal(out.decision, "block")
   assert.match(out.reason, /keep-going 1\/40/)
   assert.match(readFileSync(join(dir, ".set/handoff/keep-going.log"), "utf8"), /block kkkk1111  continue 1\/40/)
+  assert.equal(run("sdk-cli"), "", "a headless claude -p run is left alone by default (measured entrypoint)")
+  assert.equal(JSON.parse(run("sdk-cli", ["--headless"])).decision, "block", "…unless --headless")
   writeFileSync(join(dir, ".set/handoff/.no-keepgoing"), "")
   assert.equal(run(), "")
 })
