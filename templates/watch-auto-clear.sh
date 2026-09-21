@@ -170,18 +170,24 @@ turn_tmux() { # $1 = pane
   local s; s=$(tmux capture-pane -p -e -t "$1" 2>/dev/null | node "$TURN" 2>/dev/null)
   printf '%s' "${s:-unknown}"
 }
-turn_owner() { # $1 = fleet label — same patterns against the tail's last window (not fully measured there)
-  local s
-  s=$(python3 - "$1" <<'PY' 2>/dev/null | node "$TURN" --stream 2>/dev/null
-import sys
+turn_owner() { # $1 = fleet label — from ACTIVITY: drained_total growth over 2 s + prompt row (turn-state.mjs classifyActivity)
+  local raw delta
+  raw=$(python3 - "$1" <<'PY' 2>/dev/null
+import sys, time
 try:
     from set_orch.fleet.owner_client import OwnerClient
-    sys.stdout.write(OwnerClient().tail(sys.argv[1], max_bytes=20000)["data"].decode("utf-8", "replace"))
+    c = OwnerClient()
+    t0 = c.tail(sys.argv[1], max_bytes=1)["drained_total"]
+    time.sleep(2)
+    r = c.tail(sys.argv[1], max_bytes=20000)
+    print(r["drained_total"] - t0)
+    sys.stdout.write(r["data"].decode("utf-8", "replace"))
 except Exception:
     pass
 PY
 )
-  printf '%s' "${s:-unknown}"
+  delta=$(printf '%s\n' "$raw" | head -1)
+  printf '%s\n' "$raw" | tail -n +2 | node "$TURN" activity "$delta" 2>/dev/null || printf 'unknown'
 }
 
 # ONE Escape, then re-verify (measured 2026-09-14 probe: one Escape interrupts the running turn;

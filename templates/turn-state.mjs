@@ -106,6 +106,31 @@ export function fireLockState(lockJson, sid, now = Date.now(), maxMs = 600_000) 
   }
 }
 
+/**
+ * The fleet-owner path's turn state, from ACTIVITY instead of a screen window. Measured
+ * 2026-09-21: the 800-byte window of classifyStream read `unknown` on a Mac seat — the prompt row
+ * sat 1358 bytes back, behind clipboard (OSC 52) and update-banner paints, and the spinner arrives
+ * as cell-positioned fragments, never a whole row. What does separate the states: a running turn
+ * repaints its spinner continuously (5963 bytes in 3 s on a working seat) and an idle TUI writes
+ * NOTHING (0 bytes on two idle seats). So: `delta` = growth of the owner's drained_total between
+ * two reads ~2 s apart, `tail` = the last ~20 KB.
+ *   delta > 0                                   → working (a turn, or a human typing — never type)
+ *   no prompt row in the tail                   → unknown
+ *   "Resume this session with" after the prompt → exited (the TUI quit; the pid can linger in the roster)
+ *   otherwise                                   → idle
+ */
+export function classifyActivity(delta, tail) {
+  if (delta === "" || delta == null) return "unknown"
+  const d = Number(delta)
+  if (!Number.isFinite(d)) return "unknown"
+  if (d > 0) return "working"
+  const t = String(tail ?? "")
+  const prompt = t.lastIndexOf("❯\xa0")
+  if (prompt < 0) return "unknown"
+  if (t.lastIndexOf("Resume this session with") > prompt) return "exited"
+  return "idle"
+}
+
 const invoked = process.argv[1] ? resolve(process.argv[1]) : ""
 if (invoked === fileURLToPath(import.meta.url)) {
   const [cmd, a, b] = process.argv.slice(2)
@@ -122,5 +147,6 @@ if (invoked === fileURLToPath(import.meta.url)) {
   }
   let input = ""
   try { input = readFileSync(0, "utf8") } catch { /* no input ⇒ unknown */ }
+  if (cmd === "activity") { console.log(classifyActivity(a, input)); process.exit(0) }
   console.log(process.argv.includes("--stream") ? classifyStream(input) : classifyScreen(input))
 }
