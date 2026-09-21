@@ -235,7 +235,11 @@ function claudePid() {
     try {
       const stat = readFileSync(`/proc/${p}/stat`, "utf8")
       p = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1])
-    } catch { return null }
+    } catch {
+      // No /proc (macOS): ask ps, which both platforms have.
+      try { p = Number(execFileSync("ps", ["-o", "ppid=", "-p", String(p)], { encoding: "utf8" }).trim()) }
+      catch { return null }
+    }
   }
   return null
 }

@@ -102,7 +102,14 @@ fi
 
 LOG="$DIR/.set/handoff/auto-clear.log"
 mkdir -p "$(dirname "$LOG")"
-AFTER_MS=""; [ -n "$AFTER" ] && AFTER_MS=$(date -d "$AFTER" +%s%3N 2>/dev/null)
+# Parsed with node, not `date -d` (GNU-only): on macOS `date -d` fails, AFTER_MS came back EMPTY
+# and the --started-after filter silently turned off — the one filter that keeps a session which
+# cannot reload from being cleared. An unparseable value now refuses to start instead.
+AFTER_MS=""
+if [ -n "$AFTER" ]; then
+  AFTER_MS=$(node -e 'const t = Date.parse(process.argv[1]); if (Number.isFinite(t)) process.stdout.write(String(t))' "$AFTER" 2>/dev/null)
+  [ -n "$AFTER_MS" ] || { echo "--started-after: cannot parse '$AFTER' as a date" >&2; exit 2; }
+fi
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
@@ -213,7 +220,7 @@ fire_lock_held() { # $1 = tree, $2 = pid, $3 = sid
 }
 fire_lock_write() { # $1 = tree, $2 = pid, $3 = sid
   mkdir -p "$1/.set/handoff"
-  printf '{"sid":"%s","at":%s}\n' "$3" "$(date +%s%3N)" > "$1/.set/handoff/.firelock-$2" 2>/dev/null || true
+  printf '{"sid":"%s","at":%s}\n' "$3" "$(( $(date +%s) * 1000 ))" > "$1/.set/handoff/.firelock-$2" 2>/dev/null || true
 }
 
 # The fleet-owner writer (9.2): roster lookup by pid.
@@ -281,7 +288,14 @@ verify_submitted() { # $1 = pid, $2 = fragment expected in a USER entry of the f
 continue_finish() { # $1 = pid, $2 = where (log label), $3.. = how to press Enter again
   local pid="$1" where="$2" try
   shift 2
-  local fragment="${CONTINUE_FRAGMENT:-auto-continue}"
+  # The fragment comes from the prompt ACTUALLY typed. The fixed "auto-continue" default could
+  # never match a custom --auto-continue prompt (measured 2026-09-21 on a consumer seat: a
+  # prompt with no such word, a whole-file grep that matched the reinjected handoff instead,
+  # a false "confirmed", no Enter retry — the prompt sat unsent until a human pressed Enter).
+  # Cut before any quote or backslash: the transcript line is JSON and escapes those.
+  local fragment="${CONTINUE_FRAGMENT:-${CONTINUE_PROMPT:0:40}}"
+  fragment="${fragment%%[\"\\]*}"
+  [ -n "$fragment" ] || fragment="auto-continue"
   for try in 1 2 3; do
     sleep 5
     if verify_submitted "$pid" "$fragment"; then
@@ -342,12 +356,13 @@ continue_owner() { # $1 = fleet label, $2 = pid, $3 = cleared sid, $4 = tree
   continue_finish "$2" "fleet agent $1" fleet_owner_enter "$1"
 }
 
-# Is pid $1 a descendant of tmux pane pid $2? Walks the /proc parent chain.
+# Is pid $1 a descendant of tmux pane pid $2? Walks the parent chain with `ps`, which Linux and
+# macOS both have — /proc does not exist on macOS, so a /proc walk found no pane there at all.
 is_descendant() {
   local p="$1" want="$2"
   while [ -n "$p" ] && [ "$p" != "0" ] && [ "$p" != "1" ]; do
     [ "$p" = "$want" ] && return 0
-    p=$(sed -E 's/^[0-9]+ \([^)]*\) //' "/proc/$p/stat" 2>/dev/null | awk '{print $2}')
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
   done
   return 1
 }
