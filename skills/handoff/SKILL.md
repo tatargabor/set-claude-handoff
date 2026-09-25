@@ -200,6 +200,10 @@ unarmed, and the watcher refused to clear it every minute while the session sat 
 
 **In one sentence:** <where THIS thread stands and what the next step is>
 
+**This thread's goal:** <what THIS session is for — the goal/plan item it serves, or "own
+ thread". A project-level goal/plan file is context for the successor, not its work queue; the
+ lanes other sessions own go into §6.>
+
 ---
 
 ## 0. Start here — probe commands
@@ -303,6 +307,13 @@ message between sessions, not a repo artifact); the POINTER travels, not the fil
 ```bash
 ls .set/handoff/<ID>--*.md
 ```
+
+**The loaded thread is your work — nothing else.** A project-level goal or plan file (loaded at
+session start, or named in the handoff) is CONTEXT, not a queue: a step another session owns is
+not yours, even when it looks unassigned. Measured 2026-09-25 in the consumer repo: an auto-continue
+prompt pointing at the project's goal file sent a documentation session into another seat's
+bugfix lane, while its own handoff said "do not touch" about exactly that lane. If the thread is
+blocked, say so — do not adopt another.
 
 Read it, then **run the §0 probes** and **state the measured state**, not what the file says —
 the file is the *last* truth, the command is the *current* one. If they disagree, that itself is
