@@ -36,6 +36,7 @@ const MAX_AUTO = 2_300            // machine page budget (with headers, stays un
 const DEDUP_WINDOW_MS = 120_000   // same-event double-fire guard — time-boxed, never permanent
 const MARKER_PREFIX = ".written-" // same convention as the clear-gate's arm marker
 const CLEAR_LINK_MS = 300_000     // how far back the watcher's typed /clear record may be
+const FIRELOCK_MS = 900_000       // how long the watcher's `.firelock-<pid>` record is trusted
 
 /**
  * Autopilot, optional (specs: intent-ledger, drift-guard). When the ledger module is installed
@@ -54,6 +55,18 @@ async function loadAutopilot() {
   return null
 }
 const AP = await loadAutopilot()
+
+/**
+ * The line that stops a fresh session from adopting another lane. Measured 2026-09-25 in a
+ * consumer repo: a docs session woke after an automatic clear and started offering fixes in a
+ * bugfix lane its own handoff said belonged to another seat — the project's goal/priority file
+ * had been injected beside the handoff, and the fresh context read it as a work queue.
+ */
+const OWN_THREAD =
+  "**Your work is THIS handoff's thread** — continue its own next step. A project-wide goal, " +
+  "priority or status file injected beside it is CONTEXT, not your work queue: an item assigned " +
+  "to another seat or lane is not yours, even when it looks unclaimed. If this thread is blocked, " +
+  "say so — do not take over another lane."
 
 function readEvent() {
   try { return JSON.parse(readFileSync(0, "utf8")) } catch { return {} }
@@ -176,6 +189,7 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
       "",
       `**Handoff: \`${shown}\`** (${reason}).`,
       others.length > 0 ? `Other live handoffs: ${others.slice(0, 6).map((k) => (k.dir === dir ? `.set/handoff/${k.f}` : join(k.dir, k.f))).join(", ")}.` : "",
+      OWN_THREAD,
       autopilotNote,
       charter,
       "",
@@ -190,6 +204,7 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
       "## ⚠ Fresh context — NOTHING to load",
       "",
       "No handoff exists in this repository or its worktrees. If a work thread was open before the clear, it was not written down; proceed carefully and re-measure state from the repo.",
+      OWN_THREAD,
       autopilotNote,
       "",
     ].join("\n"))
@@ -247,15 +262,32 @@ function claudePid() {
 /**
  * The session an AUTOMATIC clear replaced. Probe M3 (2.1.270): the SessionStart(clear) payload
  * carries only the new id, and the runtime record is already rewritten when the hook runs — so
- * the watcher logs `{kind: "clear", session8, pid}` before it types, and this matches it by the
- * claude pid. A manual clear has no such record and binds nothing (announced in the injection).
+ * the watcher records which session it cleared, keyed by the claude pid, and this reads it back.
+ * TWO records carry the same fact, and both are read: the autopilot ledger (`typed.jsonl`) when
+ * autopilot is installed, and `.firelock-<pid>` which the watcher writes in EVERY install. A
+ * manual clear leaves neither and binds nothing (announced in the injection as an mtime guess).
  */
 export function previousSessionOf(dir, pid, now = Date.now()) {
-  if (!AP || !pid) return ""
-  const rec = AP.readJsonl(join(dir, "typed.jsonl"))
-    .filter((r) => r.kind === "clear" && r.pid === String(pid) && now - Date.parse(r.at) < CLEAR_LINK_MS)
-    .pop()
-  return rec?.session8 ?? ""
+  if (!pid) return ""
+  if (AP) {
+    const rec = AP.readJsonl(join(dir, "typed.jsonl"))
+      .filter((r) => r.kind === "clear" && r.pid === String(pid) && now - Date.parse(r.at) < CLEAR_LINK_MS)
+      .pop()
+    if (rec?.session8) return rec.session8
+  }
+  // Without autopilot installed the ledger does not exist — but the watcher writes the same
+  // fact to `.firelock-<pid>` ({sid, at}) on every automatic clear, in the tree it cleared.
+  // MEASURED 2026-09-25: with the ledger absent this function returned "" for EVERY automatic
+  // clear, so the previous session's marker was never consulted and the reload fell through to
+  // mtime — handing a fresh session whichever seat wrote last. The fallback is the same record,
+  // read from the file the watcher already writes.
+  for (const d of candidateHandoffDirs(dir)) {
+    try {
+      const rec = JSON.parse(readFileSync(join(d, `.firelock-${pid}`), "utf8"))
+      if (rec?.sid && now - Number(rec.at) < FIRELOCK_MS) return String(rec.sid)
+    } catch { /* no or unreadable lock in this tree — try the next */ }
+  }
+  return ""
 }
 
 function main() {

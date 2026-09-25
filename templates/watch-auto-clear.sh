@@ -228,9 +228,49 @@ fire_lock_held() { # $1 = tree, $2 = pid, $3 = sid
   rm -f "$f" 2>/dev/null || true
   return 1
 }
+# MEASURED 2026-09-25 20:06: the root disk was at 100 % — the firelock landed as a 0-byte file
+# (`>` truncates, the write then fails with ENOSPC, `|| true` swallowed it), and the fresh
+# session got NO handoff injected at all: the hook output never reached it. So the lock is
+# written atomically and checked, and a failed write aborts the fire (returns 1).
 fire_lock_write() { # $1 = tree, $2 = pid, $3 = sid
-  mkdir -p "$1/.set/handoff"
-  printf '{"sid":"%s","at":%s}\n' "$3" "$(( $(date +%s) * 1000 ))" > "$1/.set/handoff/.firelock-$2" 2>/dev/null || true
+  local f="$1/.set/handoff/.firelock-$2"
+  mkdir -p "$1/.set/handoff" 2>/dev/null
+  if printf '{"sid":"%s","at":%s}\n' "$3" "$(( $(date +%s) * 1000 ))" > "$f.tmp" 2>/dev/null \
+     && [ -s "$f.tmp" ] && mv -f "$f.tmp" "$f" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$f.tmp" 2>/dev/null
+  log "FIRELOCK FAILED  $3  could not write $f (disk full?) — not firing"
+  return 1
+}
+
+# Free-space gate (same measurement): a /clear under a near-full disk throws the context away
+# while the reload cannot be delivered — the SessionStart hook output and the harness's own
+# task files both need room. Both the tree's filesystem and the temp dir must have MIN_FREE_MB.
+MIN_FREE_MB="${AUTO_CLEAR_MIN_FREE_MB:-2048}"
+disk_ok() { # $1 = tree; prints the short reason on failure
+  local d avail
+  for d in "$1" "${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}"; do
+    avail=$(df -Pk "$d" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')
+    if [ -z "$avail" ] || [ "$avail" -lt "$MIN_FREE_MB" ]; then
+      printf '%s has %s MB free (< %s)' "$d" "${avail:-?}" "$MIN_FREE_MB"
+      return 1
+    fi
+  done
+}
+
+# The continue prompt NAMES the thread's handoff: if the SessionStart injection is lost, the
+# successor still knows which file is its own (2026-09-25: it had to grep the log to find it).
+continue_text() { # $1 = tree, $2 = cleared sid
+  local s8 m nev
+  s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
+  m="$1/.set/handoff/.written-$s8"
+  nev=$(awk '{print $2; exit}' "$m" 2>/dev/null)
+  if [ -n "$nev" ] && [ -f "$1/.set/handoff/$nev" ]; then
+    printf '%s (Handoff file of the cleared session %s: %s)' "$CONTINUE_PROMPT" "$s8" "$1/.set/handoff/$nev"
+  else
+    printf '%s (No .written-%s marker names a handoff for the cleared session — find its thread in .set/handoff/auto-clear.log before acting.)' "$CONTINUE_PROMPT" "$s8"
+  fi
 }
 
 # The fleet-owner writer (9.2): roster lookup by pid.
@@ -344,8 +384,9 @@ continue_tmux() { # $1 = pane, $2 = pid, $3 = cleared sid, $4 = tree
   fresh=$(continue_gate "$2" "$3" "$4") || return 0
   state=$(presence_tmux "$1")
   safe_to_type "$state" || { log "CONTINUE held  presence=$state in pane $1 — a human is at the keyboard"; return 0; }
-  typed "$4" continue "$CONTINUE_PROMPT" "$fresh" "$2"
-  tmux send-keys -t "$1" -l "$CONTINUE_PROMPT"
+  local text; text=$(continue_text "$4" "$3")
+  typed "$4" continue "$text" "$fresh" "$2"
+  tmux send-keys -t "$1" -l "$text"
   sleep 1.5
   tmux send-keys -t "$1" Enter
   log "CONTINUE sent  auto-continue prompt → pane $1"
@@ -358,8 +399,9 @@ continue_owner() { # $1 = fleet label, $2 = pid, $3 = cleared sid, $4 = tree
   fresh=$(continue_gate "$2" "$3" "$4") || return 0
   state=$(presence_owner "$1")
   safe_to_type "$state" || { log "CONTINUE held  presence=$state on fleet agent $1 — a human is at the keyboard"; return 0; }
-  typed "$4" continue "$CONTINUE_PROMPT" "$fresh" "$2"
-  fleet_write "$1" "$CONTINUE_PROMPT" || { log "CONTINUE FAILED  owner-write of the prompt to $1"; return 0; }
+  local text; text=$(continue_text "$4" "$3")
+  typed "$4" continue "$text" "$fresh" "$2"
+  fleet_write "$1" "$text" || { log "CONTINUE FAILED  owner-write of the prompt to $1"; return 0; }
   sleep 1.5
   fleet_owner_enter "$1"
   log "CONTINUE sent  auto-continue prompt → fleet agent $1"
@@ -427,9 +469,13 @@ while :; do
           log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would owner-write /clear to fleet agent $label"
           continue
         fi
+        if ! why=$(disk_ok "$tree"); then
+          log "skip  $sid  ELIGIBLE but disk low: $why — a reload could not be delivered; not clearing"
+          continue
+        fi
+        fire_lock_write "$tree" "$pane_pid" "$sid" || continue
         log "FIRE  $sid  /clear → fleet owner-write to $label (all gates held, presence ok, turn stopped)"
         typed "$tree" clear "/clear" "$sid" "$pane_pid"
-        fire_lock_write "$tree" "$pane_pid" "$sid"
         if fleet_write "$label" "/clear"; then
           sleep 0.3
           fleet_owner_enter "$label"
@@ -460,9 +506,13 @@ while :; do
       log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would /clear pane $pane"
       continue
     fi
+    if ! why=$(disk_ok "$tree"); then
+      log "skip  $sid  ELIGIBLE but disk low: $why — a reload could not be delivered; not clearing"
+      continue
+    fi
+    fire_lock_write "$tree" "$pane_pid" "$sid" || continue
     log "FIRE  $sid  /clear → pane $pane (all gates held, presence ok, turn stopped)"
     typed "$tree" clear "/clear" "$sid" "$pane_pid"
-    fire_lock_write "$tree" "$pane_pid" "$sid"
     tmux send-keys -t "$pane" -l "/clear"
     sleep 0.3
     tmux send-keys -t "$pane" Enter

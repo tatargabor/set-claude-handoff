@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, existsSync, utimesSync, mkdirSync } from "n
 import { tmpdir } from "node:os"
 import { join, basename } from "node:path"
 import { execFileSync } from "node:child_process"
-import { buildInjection, sameEventDoubleFire } from "../templates/hooks/handoff-reinject-clear.mjs"
+import { buildInjection, sameEventDoubleFire, previousSessionOf } from "../templates/hooks/handoff-reinject-clear.mjs"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "reinject-"))
 
@@ -147,4 +147,50 @@ test("with no marker the fallback stays in the session's OWN tree — measured 2
   assert.match(primaryLine, /0912-eb89--main-repo-thread\.md/, "the cwd tree's own newest page is loaded")
   assert.doesNotMatch(primaryLine, /0912-ff48/, "a sibling tree's page must not become the primary choice")
   assert.match(out, /wt-fix/, "but it stays reachable, listed by full path")
+})
+
+/** The watcher's record of the session an automatic clear replaced, keyed by the claude pid. */
+function firelock(dir, pid, sid, at = Date.now()) {
+  writeFileSync(join(dir, `.firelock-${pid}`), JSON.stringify({ sid, at }) + "\n")
+}
+
+test("without autopilot the firelock must still name the cleared session — measured 2026-09-25: the ledger is absent in a plain install, so EVERY automatic clear fell through to mtime", () => {
+  const dir = tmp()
+  firelock(dir, 4242, "aaaa1111-2222-3333-4444-555566667777")
+  assert.equal(previousSessionOf(dir, 4242), "aaaa1111-2222-3333-4444-555566667777")
+  assert.equal(previousSessionOf(dir, 9999), "", "another process's lock must not link")
+  assert.equal(previousSessionOf(dir, null), "", "no pid — nothing to follow")
+})
+
+test("a STALE firelock must be ignored — an old record would bind a fresh session to a dead thread", () => {
+  const dir = tmp()
+  firelock(dir, 4242, "aaaa1111-dead", Date.now() - 20 * 60_000)
+  assert.equal(previousSessionOf(dir, 4242), "", "past the 15-minute window the lock is not trusted")
+})
+
+test("an unreadable firelock must not take the injection down — it falls back to mtime", () => {
+  const dir = tmp()
+  writeFileSync(join(dir, ".firelock-4242"), "{ not json")
+  assert.equal(previousSessionOf(dir, 4242), "")
+})
+
+test("the cleared session's marker beats mtime on the clear path — the fresh id cannot have a marker yet", () => {
+  const dir = tmp()
+  handoff(dir, "0925-mine--docs.md", "# my own thread")
+  handoff(dir, "0925-other--bugfix.md", "# another seat's thread")
+  const older = new Date(Date.now() - 3600_000)
+  utimesSync(join(dir, "0925-mine--docs.md"), older, older) // the OTHER page is newer by mtime
+  armMarker(dir, "cleared1-1111", join(dir, "0925-mine--docs.md"))
+  const inj = buildInjection({ dir, source: "clear", sessionId: "fresh222-2222", prevSessionId: "cleared1-1111" })
+  assert.match(inj, /# my own thread/, "the cleared session's own page must win over the newer one")
+  assert.match(inj, /arm marker of the session this automatic clear replaced/)
+})
+
+test("every reload states that the thread is the work and a goal file is context — the measured lane takeover", () => {
+  const dir = tmp()
+  handoff(dir, "0925-aaaa--thread.md", "# thread")
+  assert.match(buildInjection({ dir, source: "clear", sessionId: "fresh222" }), /not your work queue/)
+  assert.match(buildInjection({ dir, source: "compact", sessionId: "fresh222" }), /not your work queue/)
+  assert.match(buildInjection({ dir: tmp(), source: "clear", sessionId: "x" }), /not your work queue/,
+    "the nothing-to-load path needs it too — that context is the likeliest to grab another lane")
 })
