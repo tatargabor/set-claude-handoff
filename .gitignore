@@ -3,3 +3,5 @@ node_modules/
 .DS_Store
 # Session scratch — /handoff writes here; never committed.
 .set/
+set/.work/
+.env

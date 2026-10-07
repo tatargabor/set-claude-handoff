@@ -10,6 +10,45 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-activity",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-skill",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-stop",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "set-hook-waveboard",
+            "timeout": 15
+          }
+        ]
       }
     ]
   }
