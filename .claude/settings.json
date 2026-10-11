@@ -20,6 +20,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "set-hook-question-relay",
+            "timeout": 3600
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
