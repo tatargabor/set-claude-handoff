@@ -181,3 +181,49 @@ test("a PROJECT opt-out (.no-autoclear) blocks every session in the tree — the
   assert.equal(res.eligible, false, "a tree-wide disable beats every other gate")
   assert.match(res.gates.find((g) => g.name === "optout").detail, /disabled for this tree/)
 })
+
+// change compact-under-background: a /compact keeps the session (and its background agents); /clear would orphan them
+const ARMED_WITH_AGENTS = () => {
+  const dir = tmp()
+  writeFileSync(join(dir, "1021-abcd--lead.md"), "# HANDOFF\n\n## 4\nBackground agents: hub, effects, capture — still running.\n")
+  armMarker(dir, "cccccccc-3333", "1021-abcd--lead.md", { passed: true })
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 380_000 } },
+    stop_reason: "end_turn",
+  }) + "\n")
+  return { dir, tr }
+}
+
+test("compact-on-background: only background work refuses the clear → action compact", () => {
+  const { dir, tr } = ARMED_WITH_AGENTS()
+  const res = evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true })
+  assert.equal(res.eligible, false)
+  assert.equal(res.action, "compact")
+})
+
+test("compact-on-background: off by default → no action", () => {
+  const { dir, tr } = ARMED_WITH_AGENTS()
+  const res = evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.action, null)
+})
+
+test("compact-on-background: below the compact threshold, or without this session's marker → no action", () => {
+  const { dir, tr } = ARMED_WITH_AGENTS()
+  assert.equal(evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true, compactThreshold: 400_000 }).action, null)
+  assert.equal(evaluate({ dir, sessionId: "dddddddd-4444", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true }).action, null)
+})
+
+test("compact-on-background: a session mid-turn is never compacted", () => {
+  const { dir, tr } = ARMED_WITH_AGENTS()
+  writeFileSync(tr, JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "go on" }] } }) + "\n", { flag: "a" })
+  assert.equal(evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true }).action, null)
+})
+
+test("compact-on-background: every gate holds → action clear, never compact", () => {
+  const { dir, tr } = ARMED_WITH_AGENTS()
+  const res = evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, threshold: 1, backgroundWorkBlocks: false, compactOnBackground: true })
+  assert.equal(res.eligible, true)
+  assert.equal(res.action, "clear")
+})

@@ -45,6 +45,9 @@
  * Usage:
  *   node clear-gate.mjs [--session <id>] [--threshold N] [--freshness SEC]
  *        [--dir <handoffDir>] [--transcript <path>] [--tokens-file <path>] [--json] [--dry-run]
+ *        [--compact-on-background true|false] [--compact-threshold N]
+ *   The verdict's `action` is `clear` (all gates hold), `compact` (opt-in: only background work refuses
+ *   the clear; the session keeps its agents) or null.
  *   A hook-style JSON on stdin (session_id, transcript_path, cwd) is also accepted.
  *
  * Exit code is 0 whenever the evaluation itself ran (eligible or not); 2 on usage/setup error.
@@ -56,6 +59,9 @@ import { basename, join, resolve } from "node:path"
 const MARKER_PREFIX = ".written-"
 const DEFAULT_THRESHOLD = 500_000
 const DEFAULT_FRESHNESS_SEC = 300
+// Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
+// own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
+const DEFAULT_COMPACT_THRESHOLD = 350_000
 const BACKGROUND_NONE_PATTERN = "none left|none running|no (?:background|running)|nem fut(?: semmi)?|nincs(?: futó)? háttér"
 
 export function session8(sessionId) {
@@ -251,7 +257,19 @@ export function evaluate(opts = {}) {
     : "no opt-out")
 
   const eligible = gates.every((g) => g.ok)
-  return { eligible, sessionId: s8, threshold, gates, at: new Date().toISOString() }
+  // action — `clear` when every gate holds; `compact` when ONLY running background work refuses the
+  // clear: a /clear starts a new session and orphans the agents (their notifications and ids are
+  // lost), a /compact keeps the session and so keeps them. Opt-in, and it still needs this
+  // session's own marker (a fresh handoff), idle, no opt-out, and the compact threshold.
+  let action = eligible ? "clear" : null
+  const compactThreshold = Number(opts.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD)
+  if (!eligible && opts.compactOnBackground) {
+    const ok = Object.fromEntries(gates.map((g) => [g.name, g.ok]))
+    const tokOk = tok.tokens != null && tok.tokens >= compactThreshold
+    if (tokOk && ok.marker && ok.idle && ok.optout && !ok.background) action = "compact"
+  }
+  return { eligible, action, sessionId: s8, threshold, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
+    gates, at: new Date().toISOString() }
 }
 
 function main(argv) {
@@ -267,6 +285,8 @@ function main(argv) {
     else if (a === "--tokens-file") o.tokensFile = argv[++i]
     else if (a === "--background-none-pattern") o.backgroundNonePattern = argv[++i]
     else if (a === "--background-work-blocks") o.backgroundWorkBlocks = argv[++i] !== "false"
+    else if (a === "--compact-on-background") o.compactOnBackground = argv[++i] !== "false"
+    else if (a === "--compact-threshold") o.compactThreshold = argv[++i]
     else { console.error(`unknown flag: ${a}`); return 2 }
   }
   if (!o.sessionId || !o.transcriptPath) {
@@ -282,6 +302,7 @@ function main(argv) {
   else {
     for (const g of result.gates) console.log(`${g.ok ? "PASS" : "FAIL"}  ${g.name.padEnd(11)} ${g.detail}`)
     console.log(`${result.eligible ? "ELIGIBLE" : "NOT ELIGIBLE"} — the gate never clears; the executor decides`)
+    if (result.action === "compact") console.log(`ACTION compact — only background work refuses the clear (≥ ${result.compactThreshold})`)
   }
   return 0
 }

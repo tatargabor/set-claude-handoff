@@ -86,6 +86,14 @@ There is no systemd: keep the watcher in its own tmux session (as above), or use
 for reboot survival. First run: add `--dry-run` and read the log — `dry … ELIGIBLE — would /clear
 pane …` proves the session records and the pane lookup work on that machine.
 
+## Background agents: compact, not clear
+
+A `/clear` starts a new session and orphans running background agents; a `/compact` keeps them. With
+`--compact-on-background true` (and optionally `--compact-threshold N`, default 350 000) on the watcher, a session whose
+ONLY refusal is running background work, with its own fresh handoff marker, idle and not opted out, gets `/compact`
+instead; the marker is removed afterwards, so the next compact needs a fresh handoff. A working turn is waited out,
+never interrupted with Escape for a compact.
+
 ## 3. OFF (argument `off`)
 
 Kill switches are FILES, not promises — an agent's verbal "don't clear me" binds nothing:

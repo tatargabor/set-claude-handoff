@@ -56,6 +56,12 @@
 #   watch-auto-clear.sh --dir <projectRoot> [--interval SEC] [--threshold N] [--freshness SEC]
 #     [--background-work-blocks true|false] [--started-after ISO] [--gate PATH] [--dry-run]
 #     [--auto-continue PROMPT] [--continue-delay SEC] [--autopilot]
+#     [--compact-on-background true|false] [--compact-threshold N]
+#
+#   --compact-on-background true   when ONLY running background work refuses the clear (the gate's
+#                 action `compact`), type /compact instead: the session — and its background agents —
+#                 survive; the session's marker is removed after it, so the next one needs a fresh
+#                 handoff. Never presses Escape for a compact: a working turn is waited out.
 #
 #   --auto-continue default   use the package's own continue prompt (DEFAULT_CONTINUE below).
 #
@@ -68,7 +74,8 @@
 set -u
 
 DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="true"; AFTER=""; GATE=""; DRY=0
-CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0
+CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
+COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
 DEFAULT_CONTINUE="Autopilot continue after an automatic /clear (auto-continue): read the reloaded handoff file in full - it is THIS session's own thread. Continue with its CURRENT next step - a later UPDATE section supersedes the original next-steps list, and a step marked done is never redone. A project-level goal or plan file is context, not a work queue: never take over a step or lane another session owns. Stop and wait only at a decision that the thread's recorded human direction does not already answer - ask it on its own line starting with NEED INPUT: so the keep-going hook lets the stop through."
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -82,6 +89,8 @@ while [ $# -gt 0 ]; do
     --auto-continue) CONTINUE_PROMPT="$2"; shift 2;;
     --continue-delay) CONTINUE_DELAY="$2"; shift 2;;
     --autopilot) AUTOPILOT=1; shift;;
+    --compact-on-background) COMPACT_BG="$2"; shift 2;;
+    --compact-threshold) COMPACT_THRESHOLD="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -408,6 +417,37 @@ continue_owner() { # $1 = fleet label, $2 = pid, $3 = cleared sid, $4 = tree
   continue_finish "$2" "fleet agent $1" fleet_owner_enter "$1"
 }
 
+# After a /compact the session id stays, so the clear path's fresh-session gate does not apply: wait
+# (no Escape) until the seat reads idle again, then type the compact-continue prompt naming the handoff.
+compact_continue() { # $1 = kind tmux|owner, $2 = target, $3 = handoff path or empty
+  [ -n "$CONTINUE_PROMPT" ] || return 0
+  local i state pres text
+  text="$COMPACT_CONTINUE${3:+ (Handoff: $3)}"
+  for i in $(seq 1 36); do
+    sleep 10
+    if [ "$1" = tmux ]; then state=$(turn_tmux "$2"); pres=$(presence_tmux "$2"); else state=$(turn_owner "$2"); pres=$(presence_owner "$2"); fi
+    [ "$state" = "idle" ] || continue
+    safe_to_type "$pres" || { log "COMPACT-CONTINUE held  presence=$pres on $2 — a human is at the keyboard"; return 0; }
+    if [ "$1" = tmux ]; then
+      tmux send-keys -t "$2" -l "$text"; sleep 1.5; tmux send-keys -t "$2" Enter
+    else
+      fleet_write "$2" "$text" || { log "COMPACT-CONTINUE FAILED  owner-write to $2"; return 0; }
+      sleep 1.5; fleet_owner_enter "$2"
+    fi
+    log "COMPACT-CONTINUE sent  → $2 after $((i * 10)) s"
+    return 0
+  done
+  log "COMPACT-CONTINUE gave up  $2 never read idle within 360 s"
+}
+# The marker armed THIS compact; the next one needs a fresh handoff. Prints the handoff path first.
+compact_disarm() { # $1 = tree, $2 = sid
+  local s8 m nev
+  s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8); m="$1/.set/handoff/.written-$s8"
+  nev=$(awk '{print $2; exit}' "$m" 2>/dev/null)
+  rm -f "$m" 2>/dev/null && log "disarm  $2  removed .written-$s8 after /compact (next compact needs a fresh handoff)"
+  [ -n "$nev" ] && printf '%s' "$1/.set/handoff/$nev"
+}
+
 # Is pid $1 a descendant of tmux pane pid $2? Walks the parent chain with `ps`, which Linux and
 # macOS both have — /proc does not exist on macOS, so a /proc walk found no pane there at all.
 is_descendant() {
@@ -419,7 +459,7 @@ is_descendant() {
   return 1
 }
 
-log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off)"
+log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off)"
 while :; do
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
@@ -437,13 +477,18 @@ while :; do
     gate_args=(--session "$sid" --transcript "$transcript" --dir "$tree/.set/handoff" --json --background-work-blocks "$BG")
     [ -n "$THRESHOLD" ] && gate_args+=(--threshold "$THRESHOLD")
     [ -n "$FRESHNESS" ] && gate_args+=(--freshness "$FRESHNESS")
+    [ "$COMPACT_BG" = "true" ] && gate_args+=(--compact-on-background true)
+    [ -n "$COMPACT_THRESHOLD" ] && gate_args+=(--compact-threshold "$COMPACT_THRESHOLD")
     verdict=$(node "$GATE" "${gate_args[@]}" 2>/dev/null) || { log "skip  $sid  gate errored"; continue; }
     eligible=$(printf '%s' "$verdict" | jq -r '.eligible // false')
     failed=$(printf '%s' "$verdict" | jq -r '[.gates[] | select(.ok == false) | .name + ":" + .detail] | join("; ")')
-    if [ "$eligible" != "true" ]; then
+    action=$(printf '%s' "$verdict" | jq -r '.action // empty')
+    if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
       log "no    $sid  $failed"
       continue
     fi
+    CMD="/clear"; [ "$action" = "compact" ] && CMD="/compact"
+    [ "$action" = "compact" ] && log "compact  $sid  only background work refuses the clear ($failed) — /compact keeps the session and its agents"
     # Eligible — find the tmux pane hosting this session's process.
     pane=""; pane_pid=$(jq -r '.pid // empty' "$rec" 2>/dev/null)
     while IFS=$'\t' read -r pp loc; do
@@ -461,12 +506,16 @@ while :; do
           log "skip  $sid  fire lock: a previous /clear is still in flight on pid $pane_pid — not re-firing"
           continue
         fi
+        if [ "$CMD" = "/compact" ] && [ "$(turn_owner "$label")" != "idle" ]; then
+          log "skip  $sid  compact waits: fleet agent $label is not idle (no Escape for a compact)"
+          continue
+        fi
         if ! stop_turn turn_owner presence_owner esc_owner "$label"; then
           log "skip  $sid  turn=$(turn_owner "$label") presence=$(presence_owner "$label") on fleet agent $label after one Escape — not typing this pass"
           continue
         fi
         if [ "$DRY" = "1" ]; then
-          log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would owner-write /clear to fleet agent $label"
+          log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would owner-write $CMD to fleet agent $label"
           continue
         fi
         if ! why=$(disk_ok "$tree"); then
@@ -474,13 +523,17 @@ while :; do
           continue
         fi
         fire_lock_write "$tree" "$pane_pid" "$sid" || continue
-        log "FIRE  $sid  /clear → fleet owner-write to $label (all gates held, presence ok, turn stopped)"
-        typed "$tree" clear "/clear" "$sid" "$pane_pid"
-        if fleet_write "$label" "/clear"; then
+        log "FIRE  $sid  $CMD → fleet owner-write to $label (all gates held, presence ok, turn stopped)"
+        typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
+        if fleet_write "$label" "$CMD"; then
           sleep 0.3
           fleet_owner_enter "$label"
           log "sent  $sid  owner-write delivered to $label"
-          continue_owner "$label" "$pane_pid" "$sid" "$tree"
+          if [ "$CMD" = "/compact" ]; then
+            compact_continue owner "$label" "$(compact_disarm "$tree" "$sid")"
+          else
+            continue_owner "$label" "$pane_pid" "$sid" "$tree"
+          fi
         else
           log "skip  $sid  owner-write FAILED for $label"
         fi
@@ -498,12 +551,16 @@ while :; do
       log "skip  $sid  fire lock: a previous /clear is still in flight on pid $pane_pid — not re-firing"
       continue
     fi
+    if [ "$CMD" = "/compact" ] && [ "$(turn_tmux "$pane")" != "idle" ]; then
+      log "skip  $sid  compact waits: pane $pane is not idle (no Escape for a compact)"
+      continue
+    fi
     if ! stop_turn turn_tmux presence_tmux esc_tmux "$pane"; then
       log "skip  $sid  turn=$(turn_tmux "$pane") presence=$(presence_tmux "$pane") in pane $pane after one Escape — not typing this pass"
       continue
     fi
     if [ "$DRY" = "1" ]; then
-      log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would /clear pane $pane"
+      log "dry   $sid  ELIGIBLE (presence ok, turn stopped) — would $CMD pane $pane"
       continue
     fi
     if ! why=$(disk_ok "$tree"); then
@@ -511,12 +568,16 @@ while :; do
       continue
     fi
     fire_lock_write "$tree" "$pane_pid" "$sid" || continue
-    log "FIRE  $sid  /clear → pane $pane (all gates held, presence ok, turn stopped)"
-    typed "$tree" clear "/clear" "$sid" "$pane_pid"
-    tmux send-keys -t "$pane" -l "/clear"
+    log "FIRE  $sid  $CMD → pane $pane (all gates held, presence ok, turn stopped)"
+    typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
+    tmux send-keys -t "$pane" -l "$CMD"
     sleep 0.3
     tmux send-keys -t "$pane" Enter
-    continue_tmux "$pane" "$pane_pid" "$sid" "$tree"
+    if [ "$CMD" = "/compact" ]; then
+      compact_continue tmux "$pane" "$(compact_disarm "$tree" "$sid")"
+    else
+      continue_tmux "$pane" "$pane_pid" "$sid" "$tree"
+    fi
   done
   sleep "$INTERVAL"
 done
