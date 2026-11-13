@@ -227,3 +227,81 @@ test("compact-on-background: every gate holds → action clear, never compact", 
   assert.equal(res.eligible, true)
   assert.equal(res.action, "clear")
 })
+
+// ── clear request: clear at a work boundary, below the threshold ──────────────────────────────
+const armedSmall = (dir, sid = "aaaaaaaa-1111", body = "# handoff\n\nnext: change-b\nBackground: none left.\n") => {
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }],
+    usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 90_000 } }, stop_reason: "end_turn" }) + "\n")
+  armMarker(dir, sid, "1113-aaaa--thread.md", { passed: true })
+  writeFileSync(join(dir, "1113-aaaa--thread.md"), body)
+  return tr
+}
+const req = (dir, name, obj) => writeFileSync(join(dir, name), typeof obj === "string" ? obj : JSON.stringify(obj))
+
+test("no request → a small session stays below the threshold — the request is the only way under it", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, false); assert.equal(res.request, null)
+})
+
+test("a valid own request whose next the handoff names → eligible below the threshold", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-b", from: "self", at: new Date().toISOString() })
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, true, JSON.stringify(res.gates)); assert.equal(res.action, "clear")
+  assert.deepEqual([res.request.file, res.request.valid, res.request.next], [".clear-request-aaaaaaaa", true, "change-b"])
+})
+
+test("a -any request serves whichever session is armed; the session's own file wins over it", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  req(dir, ".clear-request-any", { next: "change-b", from: "umbrella" })
+  let res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, true); assert.equal(res.request.file, ".clear-request-any")
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-b" })
+  res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.request.file, ".clear-request-aaaaaaaa")
+})
+
+test("a request whose next the handoff does not name is refused — no clear without a handoff that says what comes next", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-z" })
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, false); assert.equal(res.request.reason, "handoff does not name next")
+})
+
+test("a request without the session's own marker is refused — another session's handoff never arms it", () => {
+  const dir = tmp(); const tr = armedSmall(dir, "bbbbbbbb-2222")
+  req(dir, ".clear-request-any", { next: "change-b" })
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: false })
+  assert.equal(res.eligible, false); assert.equal(res.request.reason, "no armed handoff")
+})
+
+test("unparsable, next-less and stale requests are refused with the reason", () => {
+  for (const [content, reason, age] of [["{not json", "unparsable", 0], [{ from: "x" }, "no 'next'", 0], [{ next: "change-b" }, "stale", 3 * 3600]]) {
+    const dir = tmp(); const tr = armedSmall(dir)
+    req(dir, ".clear-request-aaaaaaaa", content)
+    if (age) { const t = (Date.now() / 1000) - age; utimesSync(join(dir, ".clear-request-aaaaaaaa"), t, t) }
+    const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+    assert.equal(res.eligible, false, reason); assert.equal(res.request.valid, false)
+    assert.ok(res.request.reason.startsWith(reason), `${res.request.reason} vs ${reason}`)
+  }
+})
+
+test("an opt-out beats a request, and a mid-turn session is not cleared by one", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-b" })
+  writeFileSync(join(dir, ".no-autoclear-aaaaaaaa"), "")
+  assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true }).eligible, false)
+  const dir2 = tmp(); const tr2 = armedSmall(dir2)
+  req(dir2, ".clear-request-aaaaaaaa", { next: "change-b" })
+  writeFileSync(tr2, [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } }),
+  ].join("\n") + "\n")
+  assert.equal(evaluate({ dir: dir2, sessionId: "aaaaaaaa-1111", transcriptPath: tr2, backgroundWorkBlocks: true }).eligible, false)
+})
+
+test("the default threshold is 550k", () => {
+  const dir = tmp()
+  assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111" }).threshold, 550_000)
+})

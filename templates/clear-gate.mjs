@@ -36,6 +36,14 @@
  *                   background work via BACKGROUND_NONE_PATTERN; unresolvable ⇒ blocked
  *                   (fail-closed: an unreadable declaration is not a "none"). Relax only with
  *                   the pilot's recorded measurement (task 6.4 of the change).
+ *   Clear request — `.clear-request-<session8>` (or `.clear-request-any`, whichever session of the
+ *                   tree is eligible first) in the handoff dir: JSON {"next","from","at"}. A valid
+ *                   request (parses, non-empty `next`, younger than the request TTL) whose `next`
+ *                   the armed handoff names lets gate 1 pass BELOW the threshold — a session that has
+ *                   just finished a unit of work clears at the boundary instead of carrying it into
+ *                   the next one. Every other gate still holds: own marker, idle, background,
+ *                   opt-out (an opt-out beats a request). The verdict's `request` names the file so
+ *                   the executor can claim it (rename) before it types, and delete it after.
  *   5. optout     — two kill-switch scopes: `.no-autoclear` in the handoff dir disables the
  *                   whole tree (project level); `.no-autoclear-<session8>` disables one
  *                   session. Presence blocks the clear whatever else holds — the user creates
@@ -57,7 +65,11 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkS
 import { basename, join, resolve } from "node:path"
 
 const MARKER_PREFIX = ".written-"
-const DEFAULT_THRESHOLD = 500_000
+// 550k: owner decision 2026-11-12 in the downstream family that runs this gate on every repo.
+const DEFAULT_THRESHOLD = 550_000
+const REQUEST_PREFIX = ".clear-request-"
+// A request older than this is stale: the boundary it marked has passed.
+const DEFAULT_REQUEST_TTL_SEC = 7200
 const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
@@ -182,6 +194,36 @@ export function transcriptIdle(path, window = 200) {
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
+/**
+ * The clear request for this session, if any: the session's own file first, then `-any`.
+ * Returns null when none exists, else {file, path, valid, reason?, next?, from?, at?}.
+ * Unparsable, `next`-less or stale ⇒ valid:false with the reason — never acted on.
+ */
+export function readClearRequest(dir, s8, { ttlSec = DEFAULT_REQUEST_TTL_SEC, now = Date.now() } = {}) {
+  if (!s8 || s8 === "ismeretlen") return null
+  for (const name of [REQUEST_PREFIX + s8, REQUEST_PREFIX + "any"]) {
+    const path = join(dir, name)
+    if (!existsSync(path)) continue
+    let body
+    try { body = JSON.parse(readFileSync(path, "utf8")) } catch { return { file: name, path, valid: false, reason: "unparsable" } }
+    const next = typeof body?.next === "string" ? body.next.trim() : ""
+    if (!next) return { file: name, path, valid: false, reason: "no 'next'" }
+    const ageSec = (now - statSync(path).mtimeMs) / 1000
+    if (ageSec > ttlSec) return { file: name, path, valid: false, reason: `stale (${Math.round(ageSec)}s > ${ttlSec}s)` }
+    return { file: name, path, valid: true, next, from: typeof body.from === "string" ? body.from : "self",
+      at: typeof body.at === "string" ? body.at : null }
+  }
+  return null
+}
+
+// The armed handoff's body: the marker's 2nd field names the file. null when unresolvable.
+function markerHandoffBody(dir, markerPath) {
+  const markerContent = existsSync(markerPath) ? readFileSync(markerPath, "utf8") : ""
+  const m = markerContent.match(/^\S+ (.+)$/m)
+  if (!m || !existsSync(join(dir, m[1].trim()))) return null
+  return { name: m[1].trim(), body: readFileSync(join(dir, m[1].trim()), "utf8") }
+}
+
 export function evaluate(opts = {}) {
   const threshold = Number(opts.threshold ?? DEFAULT_THRESHOLD)
   const freshnessSec = Number(opts.freshnessSec ?? DEFAULT_FRESHNESS_SEC)
@@ -199,10 +241,21 @@ export function evaluate(opts = {}) {
   const gates = []
   const add = (name, ok, detail) => gates.push({ name, ok, detail })
 
-  // 1. tokens
+  // 1. tokens — or a valid clear request whose `next` the armed handoff names
+  const markerPathEarly = join(dir, MARKER_PREFIX + s8)
   const tok = readTokens({ tokensFiles, transcriptPath, freshnessSec })
-  add("tokens", tok.tokens != null && tok.tokens >= threshold,
-    tok.tokens == null ? `unknown (source: ${tok.source})` : `${tok.tokens} ≥ ${threshold} via ${tok.source} (${Math.round(tok.ageSec ?? -1)}s old)`)
+  const over = tok.tokens != null && tok.tokens >= threshold
+  const tokDetail = tok.tokens == null ? `unknown (source: ${tok.source})` : `${tok.tokens} ${over ? "≥" : "<"} ${threshold} via ${tok.source} (${Math.round(tok.ageSec ?? -1)}s old)`
+  const req = readClearRequest(dir, s8, { ttlSec: Number(opts.requestTtlSec ?? DEFAULT_REQUEST_TTL_SEC) })
+  let request = null, reqDetail = ""
+  if (req && !req.valid) { request = { file: req.file, valid: false, reason: req.reason }; reqDetail = `; request ${req.file} refused: ${req.reason}` }
+  else if (req) {
+    const h = markerHandoffBody(dir, markerPathEarly)
+    if (!h) { request = { file: req.file, valid: false, reason: "no armed handoff" }; reqDetail = `; request ${req.file} refused: no armed handoff for this session` }
+    else if (!h.body.includes(req.next)) { request = { file: req.file, valid: false, reason: "handoff does not name next" }; reqDetail = `; request ${req.file} refused: handoff ${h.name} does not name next=${req.next}` }
+    else { request = { file: req.file, valid: true, next: req.next, from: req.from, at: req.at }; reqDetail = `; request ${req.file} next=${req.next} from=${req.from}` }
+  }
+  add("tokens", over || request?.valid === true, tokDetail + reqDetail)
 
   // 2. marker — this session's own. The s8 suffix makes it per-session-id (another session's
   //    marker never matches); the start comparison stays as ANNOUNCEMENT only: measured
@@ -232,15 +285,11 @@ export function evaluate(opts = {}) {
   let bgOk = true, bgDetail = "backgroundWorkBlocks=false — relaxed by measurement/profile"
   if (opts.backgroundWorkBlocks !== false) {
     bgOk = false; bgDetail = "blocked: backgroundWorkBlocks=true and survival across /clear is unverified"
-    const markerContent = existsSync(markerPath) ? readFileSync(markerPath, "utf8") : ""
-    if (markerContent) {
-      const m = markerContent.match(/^\S+ (.+)$/m) // marker line 2nd field: the handoff file name
-      if (m && existsSync(join(dir, m[1].trim()))) {
-        const body = readFileSync(join(dir, m[1].trim()), "utf8")
-        const re = new RegExp(opts.backgroundNonePattern ?? BACKGROUND_NONE_PATTERN, "i")
-        if (re.test(body)) { bgOk = true; bgDetail = `handoff declares no background work (${m[1].trim()})` }
-        else bgDetail = `blocked: handoff ${m[1].trim()} has no resolvable "none" declaration`
-      }
+    const h = markerHandoffBody(dir, markerPath)
+    if (h) {
+      const re = new RegExp(opts.backgroundNonePattern ?? BACKGROUND_NONE_PATTERN, "i")
+      if (re.test(h.body)) { bgOk = true; bgDetail = `handoff declares no background work (${h.name})` }
+      else bgDetail = `blocked: handoff ${h.name} has no resolvable "none" declaration`
     }
   }
   add("background", bgOk, bgDetail)
@@ -268,7 +317,7 @@ export function evaluate(opts = {}) {
     const tokOk = tok.tokens != null && tok.tokens >= compactThreshold
     if (tokOk && ok.marker && ok.idle && ok.optout && !ok.background) action = "compact"
   }
-  return { eligible, action, sessionId: s8, threshold, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
+  return { eligible, action, sessionId: s8, threshold, request, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
     gates, at: new Date().toISOString() }
 }
 
@@ -287,6 +336,7 @@ function main(argv) {
     else if (a === "--background-work-blocks") o.backgroundWorkBlocks = argv[++i] !== "false"
     else if (a === "--compact-on-background") o.compactOnBackground = argv[++i] !== "false"
     else if (a === "--compact-threshold") o.compactThreshold = argv[++i]
+    else if (a === "--request-ttl") o.requestTtlSec = argv[++i]
     else { console.error(`unknown flag: ${a}`); return 2 }
   }
   if (!o.sessionId || !o.transcriptPath) {

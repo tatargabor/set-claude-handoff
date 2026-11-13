@@ -129,6 +129,17 @@ automatic clear it re-prompts the fresh session (default off; the prompt should 
 to read the full handoff and continue its next-steps section, stopping at decision blocks).
 Fires only after automatic clears, never manual ones.
 
+**Clearing at a work boundary:** a session that has just finished a unit of work (a change
+archived, a run ended) can ask to be cleared below the threshold. It writes its handoff naming the
+next step, then `.set/handoff/.clear-request-<session8>` (or `.clear-request-any`, for whichever
+armed session of the tree is eligible first) holding `{"next": "<next step>", "from": "<who asked>",
+"at": "<ISO time>"}`. The gate lets the size gate pass when the request parses, is younger than two
+hours (`--request-ttl`), and its `next` appears in the session's own armed handoff; every other gate
+still holds, and an opt-out beats a request. The watcher claims the file by rename before it types,
+deletes it after the clear, and removes a request the gate refused as unparsable, next-less or
+stale. A peer never writes another session's request: it asks, and the session writes its own
+handoff and request. The default threshold is 550k.
+
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
 (`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —
 the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the

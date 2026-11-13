@@ -253,6 +253,33 @@ fire_lock_write() { # $1 = tree, $2 = pid, $3 = sid
   return 1
 }
 
+# Clear request (clear-gate's verdict `.request`): a session that finished a unit of work asks to
+# be cleared at that boundary, below the threshold. The watcher CLAIMS the file by rename before it
+# types, so a `.clear-request-any` fires exactly once, and deletes the claimed copy after the clear.
+# A request the gate refused as unparsable, next-less or stale is logged and removed — never acted
+# on; one refused for its handoff stays (the session may still write the handoff that names next).
+request_claim() { # $1 = tree, $2 = verdict, $3 = sid → echoes the claimed path; returns 1 when lost
+  local f; f=$(printf '%s' "$2" | jq -r 'if .request.valid == true then .request.file else empty end' 2>/dev/null)
+  [ -n "$f" ] || return 0
+  local src="$1/.set/handoff/$f" dst
+  dst="$src.taken-$(printf '%s' "$3" | tr -cd 'a-zA-Z0-9' | cut -c1-8)"
+  if mv "$src" "$dst" 2>/dev/null; then
+    log "request  $3  claimed $f next=$(printf '%s' "$2" | jq -r '.request.next') from=$(printf '%s' "$2" | jq -r '.request.from')"
+    printf '%s' "$dst"; return 0
+  fi
+  log "skip  $3  request $f was taken by another fire — re-evaluating next pass"
+  return 1
+}
+request_refused_cleanup() { # $1 = tree, $2 = verdict, $3 = sid
+  local f r; f=$(printf '%s' "$2" | jq -r 'if .request.valid == false then .request.file else empty end' 2>/dev/null)
+  [ -n "$f" ] || return 0
+  r=$(printf '%s' "$2" | jq -r '.request.reason')
+  case "$r" in
+    unparsable|"no 'next'"|stale*) rm -f "$1/.set/handoff/$f" 2>/dev/null; log "request  $3  refused $f: $r — removed" ;;
+    *) log "request  $3  refused $f: $r — kept" ;;
+  esac
+}
+
 # Free-space gate (same measurement): a /clear under a near-full disk throws the context away
 # while the reload cannot be delivered — the SessionStart hook output and the harness's own
 # task files both need room. Both the tree's filesystem and the temp dir must have MIN_FREE_MB.
@@ -483,6 +510,7 @@ while :; do
     eligible=$(printf '%s' "$verdict" | jq -r '.eligible // false')
     failed=$(printf '%s' "$verdict" | jq -r '[.gates[] | select(.ok == false) | .name + ":" + .detail] | join("; ")')
     action=$(printf '%s' "$verdict" | jq -r '.action // empty')
+    request_refused_cleanup "$tree" "$verdict" "$sid"
     if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
       log "no    $sid  $failed"
       continue
@@ -522,13 +550,16 @@ while :; do
           log "skip  $sid  ELIGIBLE but disk low: $why — a reload could not be delivered; not clearing"
           continue
         fi
-        fire_lock_write "$tree" "$pane_pid" "$sid" || continue
+        claimed=""
+        if [ "$CMD" = "/clear" ]; then claimed=$(request_claim "$tree" "$verdict" "$sid") || continue; fi
+        fire_lock_write "$tree" "$pane_pid" "$sid" || { [ -n "$claimed" ] && mv "$claimed" "${claimed%.taken-*}" 2>/dev/null; continue; }
         log "FIRE  $sid  $CMD → fleet owner-write to $label (all gates held, presence ok, turn stopped)"
         typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
         if fleet_write "$label" "$CMD"; then
           sleep 0.3
           fleet_owner_enter "$label"
           log "sent  $sid  owner-write delivered to $label"
+          [ -n "$claimed" ] && rm -f "$claimed" && log "request  $sid  executed — $(basename "$claimed") removed"
           if [ "$CMD" = "/compact" ]; then
             compact_continue owner "$label" "$(compact_disarm "$tree" "$sid")"
           else
@@ -536,6 +567,7 @@ while :; do
           fi
         else
           log "skip  $sid  owner-write FAILED for $label"
+          [ -n "$claimed" ] && mv "$claimed" "${claimed%.taken-*}" 2>/dev/null && log "request  $sid  put back after the failed write"
         fi
         continue
       fi
@@ -567,12 +599,15 @@ while :; do
       log "skip  $sid  ELIGIBLE but disk low: $why — a reload could not be delivered; not clearing"
       continue
     fi
-    fire_lock_write "$tree" "$pane_pid" "$sid" || continue
+    claimed=""
+    if [ "$CMD" = "/clear" ]; then claimed=$(request_claim "$tree" "$verdict" "$sid") || continue; fi
+    fire_lock_write "$tree" "$pane_pid" "$sid" || { [ -n "$claimed" ] && mv "$claimed" "${claimed%.taken-*}" 2>/dev/null; continue; }
     log "FIRE  $sid  $CMD → pane $pane (all gates held, presence ok, turn stopped)"
     typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
     tmux send-keys -t "$pane" -l "$CMD"
     sleep 0.3
     tmux send-keys -t "$pane" Enter
+    [ -n "$claimed" ] && rm -f "$claimed" && log "request  $sid  executed — $(basename "$claimed") removed"
     if [ "$CMD" = "/compact" ]; then
       compact_continue tmux "$pane" "$(compact_disarm "$tree" "$sid")"
     else
