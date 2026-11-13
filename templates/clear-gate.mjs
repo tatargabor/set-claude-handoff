@@ -39,7 +39,9 @@
  *   Clear request — `.clear-request-<session8>` (or `.clear-request-any`, whichever session of the
  *                   tree is eligible first) in the handoff dir: JSON {"next","from","at"}. A valid
  *                   request (parses, non-empty `next`, younger than the request TTL) whose `next`
- *                   the armed handoff names lets gate 1 pass BELOW the threshold — a session that has
+ *                   the armed handoff names as a whole token, and whose handoff was the session's
+ *                   LAST act (transcript mtime ≤ marker mtime + request window, default 600s — work
+ *                   done after the handoff would be lost), lets gate 1 pass BELOW the threshold — a session that has
  *                   just finished a unit of work clears at the boundary instead of carrying it into
  *                   the next one. Every other gate still holds: own marker, idle, background,
  *                   opt-out (an opt-out beats a request). The verdict's `request` names the file so
@@ -54,6 +56,7 @@
  *   node clear-gate.mjs [--session <id>] [--threshold N] [--freshness SEC]
  *        [--dir <handoffDir>] [--transcript <path>] [--tokens-file <path>] [--json] [--dry-run]
  *        [--compact-on-background true|false] [--compact-threshold N]
+ *        [--request-ttl SEC] [--request-window SEC]
  *   The verdict's `action` is `clear` (all gates hold), `compact` (opt-in: only background work refuses
  *   the clear; the session keeps its agents) or null.
  *   A hook-style JSON on stdin (session_id, transcript_path, cwd) is also accepted.
@@ -70,6 +73,11 @@ const DEFAULT_THRESHOLD = 550_000
 const REQUEST_PREFIX = ".clear-request-"
 // A request older than this is stale: the boundary it marked has passed.
 const DEFAULT_REQUEST_TTL_SEC = 7200
+// A request is honoured only when the armed handoff was the session's LAST act: the transcript may
+// not have moved more than this past the marker. Work done after the handoff is not in it, and a
+// clear would lose it — a peer's `-any` request must never clear a thread that kept working.
+const DEFAULT_REQUEST_WINDOW_SEC = 600
+const MIN_NEXT_LEN = 3
 const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
@@ -216,6 +224,12 @@ export function readClearRequest(dir, s8, { ttlSec = DEFAULT_REQUEST_TTL_SEC, no
   return null
 }
 
+/** `next` as a whole token of the handoff: not glued to a letter, digit, `-` or `_` on either side. */
+export function namesNext(body, next) {
+  const esc = next.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`(^|[^\\p{L}\\p{N}_-])${esc}($|[^\\p{L}\\p{N}_-])`, "u").test(body)
+}
+
 // The armed handoff's body: the marker's 2nd field names the file. null when unresolvable.
 function markerHandoffBody(dir, markerPath) {
   const markerContent = existsSync(markerPath) ? readFileSync(markerPath, "utf8") : ""
@@ -251,9 +265,15 @@ export function evaluate(opts = {}) {
   if (req && !req.valid) { request = { file: req.file, valid: false, reason: req.reason }; reqDetail = `; request ${req.file} refused: ${req.reason}` }
   else if (req) {
     const h = markerHandoffBody(dir, markerPathEarly)
-    if (!h) { request = { file: req.file, valid: false, reason: "no armed handoff" }; reqDetail = `; request ${req.file} refused: no armed handoff for this session` }
-    else if (!h.body.includes(req.next)) { request = { file: req.file, valid: false, reason: "handoff does not name next" }; reqDetail = `; request ${req.file} refused: handoff ${h.name} does not name next=${req.next}` }
-    else { request = { file: req.file, valid: true, next: req.next, from: req.from, at: req.at }; reqDetail = `; request ${req.file} next=${req.next} from=${req.from}` }
+    const windowSec = Number(opts.requestWindowSec ?? DEFAULT_REQUEST_WINDOW_SEC)
+    const refuse = (reason, why) => { request = { file: req.file, valid: false, reason }; reqDetail = `; request ${req.file} refused: ${why}` }
+    let afterSec = null
+    if (h && transcriptPath && existsSync(transcriptPath)) afterSec = (statSync(transcriptPath).mtimeMs - statSync(markerPathEarly).mtimeMs) / 1000
+    if (!h) refuse("no armed handoff", "no armed handoff for this session")
+    else if (req.next.length < MIN_NEXT_LEN || !namesNext(h.body, req.next)) refuse("handoff does not name next", `handoff ${h.name} does not name next=${req.next}`)
+    else if (afterSec == null) refuse("handoff freshness unknown", "transcript unreadable — cannot tell whether the session worked after its handoff")
+    else if (afterSec > windowSec) refuse("handoff not the last act", `the session worked ${Math.round(afterSec)}s after its handoff (> ${windowSec}s) — that work is not in ${h.name}`)
+    else { request = { file: req.file, valid: true, next: req.next, from: req.from, at: req.at }; reqDetail = `; request ${req.file} next=${req.next} from=${req.from} (handoff ${Math.round(afterSec)}s before the last transcript write)` }
   }
   add("tokens", over || request?.valid === true, tokDetail + reqDetail)
 
@@ -337,6 +357,7 @@ function main(argv) {
     else if (a === "--compact-on-background") o.compactOnBackground = argv[++i] !== "false"
     else if (a === "--compact-threshold") o.compactThreshold = argv[++i]
     else if (a === "--request-ttl") o.requestTtlSec = argv[++i]
+    else if (a === "--request-window") o.requestWindowSec = argv[++i]
     else { console.error(`unknown flag: ${a}`); return 2 }
   }
   if (!o.sessionId || !o.transcriptPath) {

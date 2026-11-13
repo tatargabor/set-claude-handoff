@@ -134,11 +134,14 @@ archived, a run ended) can ask to be cleared below the threshold. It writes its 
 next step, then `.set/handoff/.clear-request-<session8>` (or `.clear-request-any`, for whichever
 armed session of the tree is eligible first) holding `{"next": "<next step>", "from": "<who asked>",
 "at": "<ISO time>"}`. The gate lets the size gate pass when the request parses, is younger than two
-hours (`--request-ttl`), and its `next` appears in the session's own armed handoff; every other gate
-still holds, and an opt-out beats a request. The watcher claims the file by rename before it types,
+hours (`--request-ttl`), its `next` appears as a whole token in the session's own armed handoff, and
+that handoff was the session's last act: the transcript has not moved more than ten minutes past the
+arm marker (`--request-window`), because work done after the handoff is not in it and a clear would
+lose it. Every other gate still holds, and an opt-out beats a request. The watcher claims the file by rename before it types,
 deletes it after the clear, and removes a request the gate refused as unparsable, next-less or
-stale. A peer never writes another session's request: it asks, and the session writes its own
-handoff and request. The default threshold is 550k.
+stale. A peer never writes another session's `-<session8>` request: it asks, and the session writes
+its own handoff and request. A peer may write `.clear-request-any`; it clears only a session whose
+own fresh handoff already names that `next`. The default threshold is 550k.
 
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
 (`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —

@@ -305,3 +305,35 @@ test("the default threshold is 550k", () => {
   const dir = tmp()
   assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111" }).threshold, 550_000)
 })
+
+test("a request is refused when the session kept working after its handoff — that work is not in the sheet", () => {
+  const dir = tmp(); const tr = armedSmall(dir)
+  req(dir, ".clear-request-any", { next: "change-b", from: "umbrella" })
+  const later = (Date.now() / 1000) + 3600 // the transcript moved an hour past the marker
+  utimesSync(tr, later, later)
+  let res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+  assert.equal(res.eligible, false); assert.equal(res.request.reason, "handoff not the last act")
+  // a wider window (the operator's measured choice) lets it through; the default does not
+  res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true, requestWindowSec: 7200 })
+  assert.equal(res.eligible, true, JSON.stringify(res.gates))
+})
+
+test("a request with no readable transcript is refused — freshness unknown is not fresh", () => {
+  const dir = tmp(); armedSmall(dir)
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-b" })
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: join(dir, "missing.jsonl"), backgroundWorkBlocks: true })
+  assert.equal(res.eligible, false)
+  assert.equal(res.request.valid, false)
+})
+
+test("next must be a whole token of the handoff, and not trivially short", () => {
+  for (const next of ["change", "hange-b", "ch", "b"]) {
+    const dir = tmp(); const tr = armedSmall(dir)
+    req(dir, ".clear-request-aaaaaaaa", { next })
+    const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true })
+    assert.equal(res.eligible, false, next); assert.equal(res.request.reason, "handoff does not name next", next)
+  }
+  const dir = tmp(); const tr = armedSmall(dir, "aaaaaaaa-1111", "# handoff\n\nNext: `change-b` (archive first).\nBackground: none left.\n")
+  req(dir, ".clear-request-aaaaaaaa", { next: "change-b" })
+  assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true }).eligible, true)
+})
