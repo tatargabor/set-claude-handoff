@@ -220,19 +220,33 @@ fi
 # The start-filter skip is ANNOUNCED, not silent (measured 2026-11-23: the only trace of one
 # tree's 2858 skips was a per-minute log line nobody reads). The FIRST skip of a session writes
 # .excluded-<session8> — the resume command on line 1, the reason below — and logs once; later
-# passes stay quiet (the file's existence is the guard, so a second watcher cannot double-write
+# passes stay quiet (the file's NON-EMPTINESS is the guard, so a second watcher cannot double-write
 # either, exactly like nudge_record's noclobber). Nothing is ever TYPED into an excluded
 # session: its stale hooks are exactly why it is excluded (D1).
+#
+# A 0-BYTE record is the disk-full leftover (the same failure that left the 2026-09-25 firelock
+# empty: `>` creates the file, the write dies with ENOSPC): the old existence guard honoured the
+# empty file for ever — the session excluded with no resume command, no reason, and no way to
+# repair. So a 0-byte record counts as ABSENT: the body is written to a tmp file in the same
+# dir and mv'd into place only while the target still does not exist (the re-check narrows the
+# two-watchers race; both would write equivalent content anyway), and the repair logs the
+# written line once like a first write.
 excluded_record() { # $1 = tree, $2 = sid, $3 = startedAt ms, $4 = effective filter ms → rc 0 always
-  local s8 f
+  local s8 f tmp
   s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
   f="$1/.set/handoff/.excluded-$s8"
-  [ -e "$f" ] && return 0
+  [ -s "$f" ] && return 0
   mkdir -p "$1/.set/handoff" 2>/dev/null
-  if ( set -C; printf '%s claude --resume %s\nExcluded by the start filter: this process started %s, before --started-after %s — its hook snapshot predates the clear-reload wiring, so a /clear here would reload nothing. Exit and run the resume command on line 1 (same session id, new process, current hooks) to be watched again.\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "$(ms_to_iso "$3")" "$(ms_to_iso "$4")" > "$f" ) 2>/dev/null && [ -s "$f" ]; then
+  tmp="$f.tmp.$$"
+  if printf '%s claude --resume %s\nExcluded by the start filter: this process started %s, before --started-after %s — its hook snapshot predates the clear-reload wiring, so a /clear here would reload nothing. Exit and run the resume command on line 1 (same session id, new process, current hooks) to be watched again.\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" "$(ms_to_iso "$3")" "$(ms_to_iso "$4")" > "$tmp" 2>/dev/null \
+      && [ -s "$tmp" ] \
+      && { [ -s "$f" ] || mv -f "$tmp" "$f" 2>/dev/null; } \
+      && [ -s "$f" ]; then
+    rm -f "$tmp" 2>/dev/null
     log "skip  $2  started before --started-after — .excluded-$s8 written (resume + reason), logged once"
   else
+    rm -f "$tmp" 2>/dev/null
     log "skip  $2  started before --started-after"
   fi
 }

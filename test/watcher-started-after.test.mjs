@@ -59,6 +59,14 @@ test("a session that PASSES the filter loses its stale .excluded-<session8> — 
     `watched like any session once included:\n${r.log}`)
 })
 
+test("a 0-byte .excluded-<session8> is rewritten with the resume command + reason and logged once — the disk-full leftover (`>` created the file, ENOSPC ate the write) was honoured by the existence guard for ever: the session excluded with no resume command, no reason, and no way to repair", () => {
+  const r = runWatcher({ tokens: 410_000, wiredAtMin: 0, seconds: 4, excluded: "" })
+  assert.ok(r.excludedBody?.includes(`claude --resume ${SID}`), `rewritten with the way out:\n${JSON.stringify(r.excludedBody)}`)
+  assert.match(r.excludedBody ?? "", /before --started-after/, "the reason is in the record")
+  assert.equal((r.log.match(/\.excluded-\S+ written \(resume \+ reason\), logged once/gm) ?? []).length, 1,
+    `the repair is announced like a first write, once:\n${r.log}`)
+})
+
 test("a corrupt wiring stamp refuses to start — a silently OFF filter is how a session that cannot reload gets cleared", () => {
   const r = runWatcher({ tokens: 410_000, wiredStamp: "not a date\n", seconds: 2 })
   assert.deepEqual(r.keys, [], r.log)
