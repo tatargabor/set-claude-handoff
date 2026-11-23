@@ -78,7 +78,10 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, unlinkS
 import { basename, join, resolve } from "node:path"
 
 const MARKER_PREFIX = ".written-"
-// 320k — below the harness's own auto-compact, or the gate never acts first. MEASURED 2026-11-23 from
+// 400k — owner decision 2026-11-23 evening: the native window moves to 550k (a backstop, firing near
+// ~500k) and our own clear sits at 400k, because 70–120k is loaded before work starts and 320k left too
+// little room for planning (measured: context at the first call median 68k / p90 100k). History —
+// the earlier 320k default, MEASURED 2026-11-23 from
 // 543 native `compact_boundary` records (trigger auto, since 2026-11-01) on this machine's transcripts:
 // with claude-opus-5-5 at autoCompactWindow 400k, the native compact fires at 366–372k (328 of 543 in
 // 355–380k); the rest fire EARLIER (200–350k). The former 550k (2026-11-12) — and 500k before it — sat
@@ -86,7 +89,7 @@ const MARKER_PREFIX = ".written-"
 // leaves ~46k under the cluster; an idle turn end at ≥ 320k preceded 53 % of those auto compacts
 // (350k: 37 %). The trigger depends on the model's autoCompactWindow — a project with a different
 // window passes --threshold.
-export const DEFAULT_THRESHOLD = 320_000
+export const DEFAULT_THRESHOLD = 400_000
 const REQUEST_PREFIX = ".clear-request-"
 // A request older than this is stale: the boundary it marked has passed.
 const DEFAULT_REQUEST_TTL_SEC = 7200
@@ -102,7 +105,7 @@ const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
 // 350k was 16k under the 2026-11-23 native cluster (366–372k); it moves with the clear threshold.
-export const DEFAULT_COMPACT_THRESHOLD = 320_000
+export const DEFAULT_COMPACT_THRESHOLD = 400_000
 // Background work survives /clear on 2.1.330 (measured 2026-11-23) — blocking on it is opt-in.
 export const DEFAULT_BACKGROUND_WORK_BLOCKS = false
 const BACKGROUND_NONE_PATTERN = "none left|none running|no (?:background|running)|nem fut(?: semmi)?|nincs(?: futó)? háttér"

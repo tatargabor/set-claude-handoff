@@ -14,7 +14,7 @@ So the manager never types. It rotates — and the handoff is what crosses the p
 ## The rotation protocol (per agent run)
 
 ```
-measure          tokens of the last response ≥ threshold (e.g. 320 000 — below the native auto-compact)?
+measure          tokens of the last response ≥ threshold (e.g. 400 000 — below the native auto-compact)?
    │
 turn ends        the agent is between turns (no pending tool call in its transcript —
    │             the same "idle" the clear-gate checks)

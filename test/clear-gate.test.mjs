@@ -191,7 +191,7 @@ const ARMED_WITH_AGENTS = () => {
   const tr = join(dir, "t.jsonl")
   writeFileSync(tr, JSON.stringify({
     type: "assistant",
-    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 380_000 } },
+    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 450_000 } },
     stop_reason: "end_turn",
   }) + "\n")
   return { dir, tr }
@@ -212,7 +212,7 @@ test("compact-on-background: off by default → no action", () => {
 
 test("compact-on-background: below the compact threshold, or without this session's marker → no action", () => {
   const { dir, tr } = ARMED_WITH_AGENTS()
-  assert.equal(evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true, compactThreshold: 400_000 }).action, null)
+  assert.equal(evaluate({ dir, sessionId: "cccccccc-3333", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true, compactThreshold: 500_000 }).action, null)
   assert.equal(evaluate({ dir, sessionId: "dddddddd-4444", transcriptPath: tr, backgroundWorkBlocks: true, compactOnBackground: true }).action, null)
 })
 
@@ -302,13 +302,13 @@ test("an opt-out beats a request, and a mid-turn session is not cleared by one",
   assert.equal(evaluate({ dir: dir2, sessionId: "aaaaaaaa-1111", transcriptPath: tr2, backgroundWorkBlocks: true }).eligible, false)
 })
 
-test("the default thresholds sit below the native auto-compact — measured 2026-11-23: it fires at 366–372k, and from the 550k switch on (2026-11-13) a consumer watcher fired 0 times, peak verdict 462 769", () => {
+test("the default thresholds sit well below the native auto-compact — owner decision 2026-11-23: window 550k, our clear 400k. The native point is ESTIMATED from the ratio measured that day (fires at 366k of a 400k window, 0.915), not measured at 550k", () => {
   const dir = tmp()
-  const NATIVE_CLUSTER_LOW = 366_000
+  const NATIVE_POINT_ESTIMATE = Math.round(550_000 * 366 / 400)   // ≈ 503k
   const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", compactOnBackground: true })
-  assert.equal(res.threshold, 320_000)
-  assert.equal(res.compactThreshold, 320_000)
-  assert.ok(res.threshold <= NATIVE_CLUSTER_LOW - 40_000, "a margin of at least one large turn under the native trigger")
+  assert.equal(res.threshold, 400_000)
+  assert.equal(res.compactThreshold, 400_000)
+  assert.ok(res.threshold <= NATIVE_POINT_ESTIMATE - 100_000, "the owner's margin: ~100k+ under the native point, room for a long turn")
   assert.equal(KEEP_GOING_DEFAULTS.threshold, res.threshold, "keep-going nudges at the gate's own limit")
 })
 
@@ -364,10 +364,10 @@ test("arm nudge: due once for an unarmed idle session at ≥ 60 % of the thresho
   const at = (tokens) => writeFileSync(tr, JSON.stringify({ type: "assistant",
     message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 0, cache_read_input_tokens: tokens } } }) + "\n")
   const sid = "eeeeeeee-5555"
-  at(200_000)
+  at(260_000)
   let res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
   assert.equal(res.nudge.due, true, res.nudge.reason)
-  assert.equal(res.nudge.at, 192_000)
+  assert.equal(res.nudge.at, 240_000)
   writeFileSync(join(dir, ".handoff-nudged-eeeeeeee"), "recorded\n")
   res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
   assert.equal(res.nudge.due, false, "the record ends it for this session")
@@ -378,11 +378,11 @@ test("arm nudge: not due below the ratio, mid-turn, opted out, armed, or with ra
   const dir = tmp()
   const tr = join(dir, "t.jsonl")
   const sid = "ffffffff-6666"
-  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 150_000 } } }) + "\n")
-  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.due, false, "150k < 192k")
-  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1" }], usage: { input_tokens: 0, cache_read_input_tokens: 200_000 } } }) + "\n")
-  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /not idle/)
   writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 200_000 } } }) + "\n")
+  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.due, false, "200k < 240k")
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1" }], usage: { input_tokens: 0, cache_read_input_tokens: 260_000 } } }) + "\n")
+  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /not idle/)
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 260_000 } } }) + "\n")
   assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr, nudgeRatio: 0 }).nudge, null, "ratio 0 turns it off")
   writeFileSync(join(dir, ".no-autoclear-ffffffff"), "")
   assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /opted out/)

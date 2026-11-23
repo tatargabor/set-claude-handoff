@@ -142,7 +142,7 @@ lose it. Every other gate still holds, and an opt-out beats a request. The watch
 deletes it after the clear, and removes a request the gate refused as unparsable, next-less or
 stale. A peer never writes another session's `-<session8>` request: it asks, and the session writes
 its own handoff and request. A peer may write `.clear-request-any`; it clears only a session whose
-own fresh handoff already names that `next`. The default threshold is 320k — below the harness's own auto-compact, measured at 366–372k
+own fresh handoff already names that `next`. The default threshold is 400k — below the harness's own auto-compact, which the owner's settings put at a 550k window (firing near ~500k); the earlier 320k sat under a 400k window measured to fire at 366–372k
 (opus-5-5, 400k `autoCompactWindow`, 2026-11-23); a project with another window passes `--threshold`.
 
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`

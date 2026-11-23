@@ -11,7 +11,7 @@ description: >
 The cycle this arms, once running, needs no human keystrokes:
 
 ```
-1. limit (default 320k)   the gate measures each session's OWN context number
+1. limit (default 400k)   the gate measures each session's OWN context number
 2. handoff készítés       the session writes a handoff; the write-check hook arms it
 3. auto-clear             the executor types /clear when every gate holds
 4. auto-reload            the SessionStart:clear hook injects the right handoff
@@ -101,7 +101,7 @@ Measured 2026-11-23 on 2.1.330: background bash tasks and background subagents S
 the fresh session (`docs/investigations/2026-11-23-background-survival-rerun.md` in the package), so
 `--background-work-blocks` defaults to false. The compact path below acts only when the block is switched
 on (`--background-work-blocks true`): a `/compact` keeps the session, a `/clear` starts a new one. With
-`--compact-on-background true` (and optionally `--compact-threshold N`, default 320 000) on the watcher, a session whose
+`--compact-on-background true` (and optionally `--compact-threshold N`, default 400 000) on the watcher, a session whose
 ONLY refusal is running background work, with its own fresh handoff marker, idle and not opted out, gets `/compact`
 instead; the marker is removed afterwards, so the next compact needs a fresh handoff. A working turn is waited out,
 never interrupted with Escape for a compact.

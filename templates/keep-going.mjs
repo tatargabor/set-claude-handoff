@@ -34,8 +34,8 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { readTokens, session8 } from "./clear-gate.mjs"
 
-// threshold: the clear-gate's own default (320k, measured 2026-11-23) — keep the two equal.
-export const DEFAULTS = { threshold: 320_000, max: 40, markerFreshMs: 30 * 60_000, handoffNudges: 3, postEveryMs: 10 * 60_000 }
+// threshold: the clear-gate's own default (400k, owner decision 2026-11-23) — keep the two equal.
+export const DEFAULTS = { threshold: 400_000, max: 40, markerFreshMs: 30 * 60_000, handoffNudges: 3, postEveryMs: 10 * 60_000 }
 const STOP_MARK = /^[\s>*_`-]*(NEED INPUT|ALL DONE)\s*:/im
 
 /** The last assistant text of the transcript — the fallback when the Stop input lacks it. */
