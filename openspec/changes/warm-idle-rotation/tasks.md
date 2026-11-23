@@ -1,9 +1,9 @@
 ## 1. Measure
 
 - [x] 1.1 Cause of compactions below the size threshold: idle, ~54.7 min before the cache expiry (measured 2026-11-23 by the fleet session; method and numbers in design.md Context) [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 1.2 Look up whether the runtime's idle compaction has its own setting or documented timing; record the answer and its source [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 1.3 Measure the p95 of tokens one turn adds (main-thread transcripts, 7 days) — the margin for a later relative size threshold; record only, no behaviour change in this change [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 1.4 Probe whether a `PreCompact` hook fires on an AUTOMATIC compaction (size and idle) on the current runtime; record the result — a backstop is a separate change only if it fires [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 1.2 Look up whether the runtime's idle compaction has its own setting or documented timing; record the answer and its source [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 1.3 Measure the p95 of tokens one turn adds (main-thread transcripts, 7 days) — the margin for a later relative size threshold; record only, no behaviour change in this change [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 1.4 Probe whether a `PreCompact` hook fires on an AUTOMATIC compaction (size and idle) on the current runtime; record the result — a backstop is a separate change only if it fires [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
 
 ## 2. Gate
 
