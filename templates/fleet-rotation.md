@@ -14,7 +14,7 @@ So the manager never types. It rotates — and the handoff is what crosses the p
 ## The rotation protocol (per agent run)
 
 ```
-measure          tokens of the last response ≥ threshold (e.g. 500 000)?
+measure          tokens of the last response ≥ threshold (e.g. 320 000 — below the native auto-compact)?
    │
 turn ends        the agent is between turns (no pending tool call in its transcript —
    │             the same "idle" the clear-gate checks)
@@ -52,7 +52,7 @@ The `backgroundWorkBlocks` flag defaults to false: background work survived `/cl
 ## Manager-side sketch (set-core, Python — the wiring lands in that repo)
 
 ```python
-def maybe_rotate(agent, threshold=500_000):
+def maybe_rotate(agent, threshold=320_000):
     if agent.last_usage_tokens < threshold or not agent.turn_ended:
         return
     send(agent, f"Context is at {agent.last_usage_tokens//1000}k. Write the session "

@@ -11,7 +11,7 @@ description: >
 The cycle this arms, once running, needs no human keystrokes:
 
 ```
-1. limit (default 500k)   the gate measures each session's OWN context number
+1. limit (default 320k)   the gate measures each session's OWN context number
 2. handoff készítés       the session writes a handoff; the write-check hook arms it
 3. auto-clear             the executor types /clear when every gate holds
 4. auto-reload            the SessionStart:clear hook injects the right handoff
@@ -89,7 +89,7 @@ pane …` proves the session records and the pane lookup work on that machine.
 ## Background agents: compact, not clear
 
 A `/clear` starts a new session and orphans running background agents; a `/compact` keeps them. With
-`--compact-on-background true` (and optionally `--compact-threshold N`, default 350 000) on the watcher, a session whose
+`--compact-on-background true` (and optionally `--compact-threshold N`, default 320 000) on the watcher, a session whose
 ONLY refusal is running background work, with its own fresh handoff marker, idle and not opted out, gets `/compact`
 instead; the marker is removed afterwards, so the next compact needs a fresh handoff. A working turn is waited out,
 never interrupted with Escape for a compact.

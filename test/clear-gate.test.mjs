@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, existsSync } from "n
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { armMarker, evaluate, readTokens, sessionStartAt } from "../templates/clear-gate.mjs"
+import { DEFAULTS as KEEP_GOING_DEFAULTS } from "../templates/keep-going.mjs"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "gate-"))
 
@@ -301,9 +302,14 @@ test("an opt-out beats a request, and a mid-turn session is not cleared by one",
   assert.equal(evaluate({ dir: dir2, sessionId: "aaaaaaaa-1111", transcriptPath: tr2, backgroundWorkBlocks: true }).eligible, false)
 })
 
-test("the default threshold is 550k", () => {
+test("the default thresholds sit below the native auto-compact — measured 2026-11-23: it fires at 366–372k, and from the 550k switch on (2026-11-13) a consumer watcher fired 0 times, peak verdict 462 769", () => {
   const dir = tmp()
-  assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111" }).threshold, 550_000)
+  const NATIVE_CLUSTER_LOW = 366_000
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", compactOnBackground: true })
+  assert.equal(res.threshold, 320_000)
+  assert.equal(res.compactThreshold, 320_000)
+  assert.ok(res.threshold <= NATIVE_CLUSTER_LOW - 40_000, "a margin of at least one large turn under the native trigger")
+  assert.equal(KEEP_GOING_DEFAULTS.threshold, res.threshold, "keep-going nudges at the gate's own limit")
 })
 
 test("a request is refused when the session kept working after its handoff — that work is not in the sheet", () => {

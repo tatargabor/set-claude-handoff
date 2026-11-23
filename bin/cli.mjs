@@ -155,18 +155,18 @@ Next, merge YOURSELF (init never touches these — they are consumer-owned):
    OPTIONAL — keep-going (the session stops only on a line starting NEED INPUT: or ALL DONE:,
    and writes the handoff itself at the limit; off again with: touch .set/handoff/.no-keepgoing):
      "Stop":        [ { "hooks": [ { "type": "command",
-         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" stop --threshold 500000 --max 40", "timeout": 10 } ] } ]
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" stop --threshold 320000 --max 40", "timeout": 10 } ] } ]
      "PostToolUse": [ { "matcher": "*", "hooks": [ { "type": "command",
-         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" post --threshold 500000", "timeout": 10 } ] } ]
-   Keep --threshold equal to the watcher's (default 500000), and start the watcher with
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" post --threshold 320000", "timeout": 10 } ] } ]
+   Keep --threshold equal to the watcher's (default 320000), and start the watcher with
    --auto-continue default so the cleared session is re-prompted.
 
 2. Your statusline (~/.claude/statusline.sh) — paste the fragment from
    templates/statusline-persist.sh so .set/handoff/.context-tokens gets the live token count.
 
 3. Profile fields (document them in .claude/handoff.profile.md — init does not write profiles):
-     clearThresholdTokens: 500000   tokenFreshnessSeconds: 300   backgroundWorkBlocks: false
-   Pass them to the gate:  node .claude/hooks/clear-gate.mjs --threshold 500000 --freshness 300
+     clearThresholdTokens: 320000   tokenFreshnessSeconds: 300   backgroundWorkBlocks: false
+   Pass them to the gate:  node .claude/hooks/clear-gate.mjs --threshold 320000 --freshness 300
                            --background-work-blocks false --session <id> --transcript <path> --json
 
 The gate only EVALUATES (exit 0, verdict in stdout/--json); an external executor — tmux
