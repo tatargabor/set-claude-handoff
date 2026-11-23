@@ -1,6 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { runWatcher, SID } from "./helpers/watcher-harness.mjs"
+
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 // The bug these guard, measured 2026-11-23 in one product family's trees: with --started-after now
 // (the /auto-clear skill's own command until this change), the arming session itself is excluded,
@@ -56,4 +61,12 @@ test("no stamp and no --started-after: no default filter — the old session is 
   assert.equal(r.excluded, null, r.log)
   assert.match(r.log, /watcher started .* started-after=any/)
   assert.deepEqual(r.keys.slice(0, 2), ["-t fake:0.0 -l /handoff", "-t fake:0.0 Enter"], r.log)
+})
+
+test("the /auto-clear skill names the promised interface — the wiring-stamp default, the exclusion record, the resume way out — and no longer advises --started-after now, the command that excluded the arming session itself (agreed with another team; change started-after-self-exclusion)", () => {
+  const skill = readFileSync(join(PKG_ROOT, "skills/auto-clear/SKILL.md"), "utf8")
+  assert.match(skill, /\.reload-wired-at/, "the wiring stamp is named")
+  assert.match(skill, /\.excluded-<session8>/, "the exclusion record is named")
+  assert.match(skill, /claude --resume <id>/, "the way out is named")
+  assert.doesNotMatch(skill, /--started-after \$\(date/, "the old advice is gone from the watcher command")
 })
