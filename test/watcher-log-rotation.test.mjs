@@ -24,3 +24,10 @@ test("per-pass rotation: a log that crosses the cap DURING the run rotates at th
   assert.match(r.log1, /watcher started/, "the .1 must hold this run's own started line — proof of a mid-run rotation, not the startup check")
   assert.match(r.log.split("\n")[0], / rotate /, r.log)
 })
+
+test("--log-max-kb 0 is refused at startup with the same exit 2 style — measured: 0 KB rotated on EVERY pass, so the log never held more than one pass's lines", () => {
+  const r = runWatcher({ tokens: 100_000, seconds: 2, extraArgs: ["--log-max-kb", "0"] })
+  assert.equal(r.status, 2, `expected exit 2, got ${r.status}:\n${r.stderr}`)
+  assert.match(r.stderr, /--log-max-kb must be a positive integer \(KB\), got: 0/, r.stderr)
+  assert.ok(!r.log.includes("watcher started"), `the watcher must not start:\n${r.log}`)
+})

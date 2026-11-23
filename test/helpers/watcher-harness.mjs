@@ -70,11 +70,12 @@ exit 0
     spawn("bash", ["-c", mutate], { cwd: base, detached: true, stdio: "ignore",
       env: { ...process.env, TMPDIR: base, HD: hd, TDIR: tdir } }).unref()
   }
-  spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
+  const run = spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
     env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
   return {
+    status: run.status, stderr: run.stderr ?? "",
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
     log, log1: existsSync(`${logPath}.1`) ? readFileSync(`${logPath}.1`, "utf8") : null,
     base, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,

@@ -211,6 +211,8 @@ no_log_due() { # $1 = sid, $2 = shape
 # names the rotation and the size. `wc -c <` is the portable size check.
 LOG_MAX_KB="${LOG_MAX_KB:-5120}"
 case "$LOG_MAX_KB" in ''|*[!0-9]*) echo "--log-max-kb must be an integer (KB), got: $LOG_MAX_KB" >&2; exit 2;; esac
+# 0 is a valid integer but rotates every pass — the log never grows past one pass's lines.
+[ "$LOG_MAX_KB" -gt 0 ] || { echo "--log-max-kb must be a positive integer (KB), got: $LOG_MAX_KB" >&2; exit 2; }
 log_rotate() {
   local bytes
   [ -f "$LOG" ] || return 0
