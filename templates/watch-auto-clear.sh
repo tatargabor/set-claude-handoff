@@ -183,7 +183,8 @@ verdict_shape() { printf '%s' "$1" | sed -e 's/[0-9][0-9]*/N/g' -e 's/\(N\)\(\.N
 
 # The per-pass "no" line is written only when THIS session's shape changed, or NO_HEARTBEAT_S
 # passed since its last written line (a heartbeat, so a tail still shows the session is watched).
-# Every other line (FIRE, NUDGE, request, warm-idle, skip) is never deduped. rc 0 = write it.
+# The memory is per watcher: two watchers on one tree each keep their own and each log their own
+# line. Every other line (FIRE, NUDGE, request, warm-idle, skip) is never deduped. rc 0 = write it.
 NO_HEARTBEAT_S=1800
 no_log_due() { # $1 = sid, $2 = shape
   local f now last seen
