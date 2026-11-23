@@ -62,12 +62,14 @@
 #                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
 #                 `true` makes the gate refuse unless the armed handoff declares "none" (fail-closed).
 #
-#   --arm-nudge true|false   default true. An idle session with no handoff marker yet, at ≥ nudge-ratio ×
-#                 threshold (--nudge-ratio, default 0.6 in the gate), gets `/handoff` typed ONCE so it
-#                 writes the handoff the clear needs (2026-11-23: 80 of 141 watched sessions in one
-#                 consumer tree never armed). Recorded in .set/handoff/.handoff-nudged-<session8>
-#                 BEFORE typing — never repeated, even after a failed write. Same presence gate;
-#                 a working turn is waited out (no Escape for a nudge).
+#   --arm-nudge true|false   default true. An idle session with no FRESH handoff marker (none, or one
+#                 its later work made stale) at ≥ nudge-ratio × threshold (--nudge-ratio, default 1.0 in
+#                 the gate: the handoff runs right before the clear) gets `/handoff` typed, so the clear
+#                 that follows carries all its work (2026-11-23: 80 of 141 watched sessions in one consumer
+#                 tree never armed; the former 0.6 asked at 240k and the 400k clear lost the rest). Each ask
+#                 is recorded BEFORE typing (.handoff-nudged-<session8>, then .2, .3); a session is asked
+#                 again only after it answered, at most 3 times. Same presence gate; a working turn is
+#                 waited out (no Escape for a nudge).
 #
 #   --idle-minutes M / --idle-floor N   the WARM-IDLE trigger (change warm-idle-rotation), defaults 48 and
 #                 200000 in the gate, 0 disables. The runtime compacts an idle 200k+ session by itself at
@@ -513,10 +515,11 @@ pane_of_pid() {
 # threshold that was never nudged. The record is created with noclobber (O_EXCL) BEFORE typing, so two
 # passes — or two watchers — can never type it twice; a write that fails types nothing.
 NUDGE_TEXT="/handoff"
-nudge_record() { # $1 = tree, $2 = sid, $3 = trigger (size|warm-idle) → rc 0 only when THIS call created the record
+nudge_record() { # $1 = tree, $2 = sid, $3 = trigger (size|warm-idle), $4 = record name from the verdict → rc 0 only when THIS call created it
   local s8 f
   s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
-  f="$1/.set/handoff/.handoff-nudged-$s8"
+  case "$4" in .handoff-nudged-"$s8"|.handoff-nudged-"$s8".[0-9]) f="$1/.set/handoff/$4" ;;
+    *) log "NUDGE FAILED  $2  the verdict named no valid record (${4:-none}) — not typing"; return 1 ;; esac
   [ -e "$f" ] && { log "nudge $2  already recorded in $(basename "$f") — never repeated"; return 1; }
   if ( set -C; printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NUDGE_TEXT" "${3:-size}" > "$f" ) 2>/dev/null && [ -s "$f" ]; then
     return 0
@@ -525,9 +528,11 @@ nudge_record() { # $1 = tree, $2 = sid, $3 = trigger (size|warm-idle) → rc 0 o
   return 1
 }
 nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
-  local pane label pres turn tokens why
+  local pane label pres turn tokens why rec nth
   tokens=$(printf '%s' "$4" | jq -r '.nudge.tokens // "?"' 2>/dev/null)
   why=$(printf '%s' "$4" | jq -r '.nudge.trigger // "size"' 2>/dev/null)
+  rec=$(printf '%s' "$4" | jq -r '.nudge.record // empty' 2>/dev/null)
+  nth=$(printf '%s' "$4" | jq -r '"\(.nudge.ask // 1)/\(.nudge.of // 1)"' 2>/dev/null)
   pane=$(pane_of_pid "$3")
   if [ -n "$pane" ]; then
     pres=$(presence_tmux "$pane"); turn=$(turn_tmux "$pane")
@@ -539,14 +544,14 @@ nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
   safe_to_type "$pres" || { log "nudge $2  due at $tokens but presence=$pres — a human may be typing; not this pass"; return 0; }
   [ "$turn" = "idle" ] || { log "nudge $2  due at $tokens but turn=$turn — waits (no Escape for a nudge)"; return 0; }
   if [ "$DRY" = "1" ]; then log "dry   $2  nudge due at $tokens — would type $NUDGE_TEXT once"; return 0; fi
-  nudge_record "$1" "$2" "$why" || return 0
+  nudge_record "$1" "$2" "$why" "$rec" || return 0
   typed "$1" nudge "$NUDGE_TEXT" "$2" "$3"
   if [ -n "$pane" ]; then
     tmux send-keys -t "$pane" -l "$NUDGE_TEXT"; sleep 0.3; tmux send-keys -t "$pane" Enter
-    log "NUDGE $2  $NUDGE_TEXT → pane $pane at $tokens tokens (trigger=$why; unarmed, idle; recorded — never repeated)"
+    log "NUDGE $2  $NUDGE_TEXT → pane $pane at $tokens tokens (trigger=$why, ask $nth; $(printf '%s' "$4" | jq -r '.nudge.reason' 2>/dev/null); recorded in $rec)"
   elif fleet_write "$label" "$NUDGE_TEXT"; then
     sleep 0.3; fleet_owner_enter "$label"
-    log "NUDGE $2  $NUDGE_TEXT → fleet agent $label at $tokens tokens (trigger=$why; unarmed, idle; recorded — never repeated)"
+    log "NUDGE $2  $NUDGE_TEXT → fleet agent $label at $tokens tokens (trigger=$why, ask $nth; $(printf '%s' "$4" | jq -r '.nudge.reason' 2>/dev/null); recorded in $rec)"
   else
     log "NUDGE FAILED  $2  owner-write to $label — recorded anyway, never retried"
   fi

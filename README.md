@@ -145,6 +145,12 @@ its own handoff and request. A peer may write `.clear-request-any`; it clears on
 own fresh handoff already names that `next`. The default threshold is 400k — below the harness's own auto-compact, which the owner's settings put at a 550k window (firing near ~500k); the earlier 320k sat under a 400k window measured to fire at 366–372k
 (opus-5-5, 400k `autoCompactWindow`, 2026-11-23); a project with another window passes `--threshold`.
 
+**The handoff runs right before the clear.** The marker gate passes only when the handoff was the
+session's last act, meaning its last assistant record is at most `--request-window` (600 s) after the
+marker. At the threshold, an idle session with no fresh handoff gets `/handoff` typed, and the clear
+follows once it exists. A stale handoff is asked for again only after the previous ask was answered,
+and at most 3 times.
+
 **Warm-idle rotation**, the second trigger. The harness also compacts an IDLE session by itself
 (*idle compaction*, ≥ 200k tokens, ~54 min after the last request). That is about a third of the
 compactions measured, and no size threshold reaches them. So a session idle for `--idle-minutes`

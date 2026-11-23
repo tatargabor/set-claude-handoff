@@ -358,20 +358,21 @@ test("background work no longer blocks by default — measured 2026-11-23 on 2.1
   assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr, backgroundWorkBlocks: true }).eligible, false)
 })
 
-test("arm nudge: due once for an unarmed idle session at ≥ 60 % of the threshold, never again after the record — 80 of 141 watched sessions never armed (2026-11-23)", () => {
+test("arm nudge: due for an unarmed idle session AT the threshold (the handoff runs right before the clear), not asked again while unanswered — 80 of 141 watched sessions never armed (2026-11-23)", () => {
   const dir = tmp()
   const tr = join(dir, "t.jsonl")
   const at = (tokens) => writeFileSync(tr, JSON.stringify({ type: "assistant",
     message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 0, cache_read_input_tokens: tokens } } }) + "\n")
   const sid = "eeeeeeee-5555"
-  at(260_000)
+  at(410_000)
   let res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
   assert.equal(res.nudge.due, true, res.nudge.reason)
-  assert.equal(res.nudge.at, 240_000)
+  assert.equal(res.nudge.at, 400_000)
+  assert.equal(res.nudge.record, ".handoff-nudged-eeeeeeee")
   writeFileSync(join(dir, ".handoff-nudged-eeeeeeee"), "recorded\n")
   res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
-  assert.equal(res.nudge.due, false, "the record ends it for this session")
-  assert.match(res.nudge.reason, /already nudged/)
+  assert.equal(res.nudge.due, false, "an unanswered ask is not repeated")
+  assert.match(res.nudge.reason, /not answered/)
 })
 
 test("arm nudge: not due below the ratio, mid-turn, opted out, armed, or with ratio 0", () => {
@@ -379,10 +380,12 @@ test("arm nudge: not due below the ratio, mid-turn, opted out, armed, or with ra
   const tr = join(dir, "t.jsonl")
   const sid = "ffffffff-6666"
   writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 200_000 } } }) + "\n")
-  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.due, false, "200k < 240k")
-  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1" }], usage: { input_tokens: 0, cache_read_input_tokens: 260_000 } } }) + "\n")
-  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /not idle/)
+  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.due, false, "200k < 400k")
   writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 260_000 } } }) + "\n")
+  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /260000 < 400000/, "the former 60 % (240k) no longer asks")
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1" }], usage: { input_tokens: 0, cache_read_input_tokens: 410_000 } } }) + "\n")
+  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /not idle/)
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 410_000 } } }) + "\n")
   assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr, nudgeRatio: 0 }).nudge.due, false, "ratio 0 turns the size nudge off")
   assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr, nudgeRatio: 0, idleMinutes: 0 }).nudge, null, "ratio 0 + idle-minutes 0: no nudge at all")
   writeFileSync(join(dir, ".no-autoclear-ffffffff"), "")

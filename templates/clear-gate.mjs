@@ -27,6 +27,10 @@
  *                   restore keeps the id and restarts the process) is reported in the detail,
  *                   not enforced: blocking a restored thread from its own armed handoff was
  *                   measured harmful on 2026-09-13.
+ *                   FRESH is enforced, since 2026-11-23: the session's last assistant record (else the
+ *                   transcript mtime) may trail the marker by at most the request window (600 s).
+ *                   A stale marker (work after the handoff) fails the gate on every path, because
+ *                   a clear carries only what the handoff holds.
  *   3. idle       — transcript tail has no unanswered user message and no tool_use without its
  *                   tool_result. A tool awaiting a PERMISSION decision also has no result yet,
  *                   so a pending prompt fails this gate — which is load-bearing: a dialog
@@ -50,12 +54,13 @@
  *                   opt-out (an opt-out beats a request). The verdict's `request` names the file so
  *                   the executor can claim it (rename) before it types, and delete it after.
  *   Arm nudge   — NOT a gate: the verdict's `nudge` says whether the executor should type `/handoff`
- *                   ONCE into an idle session that has no marker yet and is at ≥ nudge-ratio ×
- *                   threshold (default 0.6). Measured 2026-11-23 in one consumer tree: 80 of 141
- *                   watched sessions never armed — nothing asked them to write the handoff, so the
- *                   clear could never fire. `.handoff-nudged-<session8>` in the handoff dir records
- *                   the nudge; once it exists the nudge is never due again for that session. Idle and
- *                   opt-out hold for it like for a clear. `--nudge-ratio 0` turns it off.
+ *                   into an idle session with no FRESH marker at ≥ nudge-ratio × threshold (default
+ *                   1.0: the handoff runs right before the clear). Measured 2026-11-23 in one consumer
+ *                   tree: 80 of 141 watched sessions never armed. The former 0.6 asked at 240k, and
+ *                   the 400k clear lost everything done in between. Each ask is recorded first
+ *                   (`.handoff-nudged-<session8>`, then `.2`, `.3`; the verdict names the next one).
+ *                   A session is asked again only after it answered, and at most 3 times. Idle and
+ *                   opt-out hold for it like for a clear. `--nudge-ratio 0` turns off the size ask.
  *   Warm-idle   — the SECOND trigger beside the size threshold (change warm-idle-rotation). The runtime
  *                   compacts an idle 200k+ session by itself at ~53.8 min after its last request
  *                   (documented as idle compaction; measured: ≈ 35 % of one product family's auto
@@ -116,7 +121,13 @@ const DEFAULT_REQUEST_WINDOW_SEC = 600
 const MIN_NEXT_LEN = 3
 // Arm nudge: the record that a session was asked for its handoff — once per session, never again.
 export const NUDGE_PREFIX = ".handoff-nudged-"
-const DEFAULT_NUDGE_RATIO = 0.6
+// 1.0 since 2026-11-23 (owner rule: the handoff runs right before the clear). The former 0.6 was never
+// measured; it rode the threshold from 192k to 240k, and the handoff it asked for armed a clear at 400k
+// that lost everything done in between.
+const DEFAULT_NUDGE_RATIO = 1.0
+// A stale handoff may be asked for again, only after the previous ask was answered, and at most this
+// many times in a session's life. A session that ignores the ask is left to the native compaction.
+export const MAX_NUDGES = 3
 const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
@@ -280,11 +291,11 @@ export function lastAssistantAt(path, window = 400) {
  * - one of two paths applies:
  *   · the last request is ≥ idleMinutes and < IDLE_STOP_MINUTES old;
  *   · a warm-idle nudge was answered: the marker is newer than the nudge record.
- * An ARMED session is only due when its handoff was its last act. A marker older than the last
- * work would clear away the work done since, and the request path refuses exactly that.
+ * Whether the marker is FRESH (the handoff was the last act) is the marker gate's business. A due
+ * verdict with a stale marker is not eligible, and the nudge asks for a fresh handoff instead.
  */
 export function warmIdleVerdict({ minutesOpt, floor, tokens, turnIdle, turnReason, optoutOk, lastAt, now,
-  markerMtime, nudgeRecord, lastActWindowSec }) {
+  markerMtime, nudgeRecord }) {
   const base = { due: false, minutes: null, floor, late: false }
   if (!(minutesOpt > 0) || !(floor > 0)) return { ...base, reason: "off" }
   const minutes = lastAt == null ? null : Math.round(((now - lastAt) / 60_000) * 10) / 10
@@ -299,12 +310,23 @@ export function warmIdleVerdict({ minutesOpt, floor, tokens, turnIdle, turnReaso
   if (!answered && minutes >= IDLE_STOP_MINUTES) {
     return out(`warm window missed: idle ${minutes} min ≥ ${IDLE_STOP_MINUTES}${markerMtime == null ? " with no armed handoff" : ""} — the runtime's idle compaction is under way; nothing typed`, { late: true })
   }
-  if (markerMtime != null && lastAt - markerMtime > lastActWindowSec * 1000) {
-    return out(`armed handoff is ${Math.round((lastAt - markerMtime) / 60_000)} min older than the last work — a clear would lose that work; write a fresh handoff`)
-  }
   return out(answered
     ? `handoff written after the ${WARM_IDLE} nudge, ${tokens} ≥ floor ${floor}, turn ended`
     : `idle ${minutes} min ≥ ${minutesOpt}, ${tokens} ≥ floor ${floor}, turn ended`, { due: true })
+}
+
+/** The session's ask records, in order: `.handoff-nudged-<s8>`, then `.2`, `.3`. */
+export function nudgeRecords(dir, s8) {
+  const names = [NUDGE_PREFIX + s8, ...Array.from({ length: MAX_NUDGES - 1 }, (_, i) => `${NUDGE_PREFIX}${s8}.${i + 2}`)]
+  const found = []
+  for (const name of names) {
+    const path = join(dir, name)
+    if (!existsSync(path)) break
+    let warm = false
+    try { warm = readFileSync(path, "utf8").includes(WARM_IDLE) } catch { /* unreadable ⇒ not a warm ask */ }
+    found.push({ name, mtime: statSync(path).mtimeMs, warm })
+  }
+  return { count: found.length, latest: found.at(-1) ?? null, next: found.length < MAX_NUDGES ? names[found.length] : null }
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -386,17 +408,20 @@ export function evaluate(opts = {}) {
   const now = Number(opts.now ?? Date.now())
   const turn = transcriptIdle(transcriptPath)
   const optoutEarly = !existsSync(join(dir, ".no-autoclear")) && !(s8 !== "ismeretlen" && existsSync(join(dir, `.no-autoclear-${s8}`)))
-  const nudgePath = join(dir, NUDGE_PREFIX + s8)
-  let nudgeRecord = null
-  if (s8 !== "ismeretlen" && existsSync(nudgePath)) {
-    try { nudgeRecord = { mtime: statSync(nudgePath).mtimeMs, warm: readFileSync(nudgePath, "utf8").includes(WARM_IDLE) } } catch { /* unreadable ⇒ not a warm nudge */ }
-  }
+  const records = s8 !== "ismeretlen" ? nudgeRecords(dir, s8) : { count: 0, latest: null, next: null }
+  // Freshness: the handoff must be the session's last act. Last work = the last assistant record's
+  // timestamp, else the transcript's mtime; it may trail the marker by at most the request window.
+  const windowSec = Number(opts.requestWindowSec ?? DEFAULT_REQUEST_WINDOW_SEC)
+  const lastAt = lastAssistantAt(transcriptPath)
+  const markerMtime = s8 !== "ismeretlen" && existsSync(markerPathEarly) ? statSync(markerPathEarly).mtimeMs : null
+  let lastWork = lastAt
+  if (lastWork == null && transcriptPath && existsSync(transcriptPath)) lastWork = statSync(transcriptPath).mtimeMs
+  const lagSec = markerMtime != null && lastWork != null ? (lastWork - markerMtime) / 1000 : null
+  const markerFresh = markerMtime != null && (lagSec == null || lagSec <= windowSec)
   const warm = warmIdleVerdict({
     minutesOpt: Number(opts.idleMinutes ?? DEFAULT_IDLE_MINUTES), floor: Number(opts.idleFloor ?? DEFAULT_IDLE_FLOOR),
     tokens: tok.tokens, turnIdle: turn.idle, turnReason: turn.reason, optoutOk: optoutEarly,
-    lastAt: lastAssistantAt(transcriptPath), now,
-    markerMtime: s8 !== "ismeretlen" && existsSync(markerPathEarly) ? statSync(markerPathEarly).mtimeMs : null,
-    nudgeRecord, lastActWindowSec: Number(opts.requestWindowSec ?? DEFAULT_REQUEST_WINDOW_SEC),
+    lastAt, now, markerMtime: markerFresh ? markerMtime : null, nudgeRecord: records.latest,
   })
   const warmDetail = warm.due || warm.late || (warm.minutes != null && warm.minutes >= Number(opts.idleMinutes ?? DEFAULT_IDLE_MINUTES))
     ? `; ${WARM_IDLE}: ${warm.reason}` : ""
@@ -411,7 +436,9 @@ export function evaluate(opts = {}) {
   const markerPath = join(dir, MARKER_PREFIX + s8)
   let markerOk = false, markerDetail = "no marker for this session"
   if (s8 === "ismeretlen") markerDetail = "no session id given"
-  else if (existsSync(markerPath)) {
+  else if (existsSync(markerPath) && !markerFresh) {
+    markerDetail = `marker present but STALE: the session worked ${Math.round(lagSec / 60)} min after its handoff (> ${windowSec}s) — that work is not in it; a fresh handoff is needed`
+  } else if (existsSync(markerPath)) {
     markerOk = true
     const startAt = sessionStartAt(sessionId)
     const mtime = statSync(markerPath).mtimeMs
@@ -463,20 +490,23 @@ export function evaluate(opts = {}) {
     const tokOk = tok.tokens != null && tok.tokens >= compactThreshold
     if (tokOk && ok.marker && ok.idle && ok.optout && !ok.background) action = "compact"
   }
-  // Arm nudge — due when this session has no marker yet, is idle, not opted out, never nudged, and
-  // has reached nudge-ratio × threshold: early enough that the handoff exists before the limit.
-  // The warm-idle trigger asks through the SAME record, so a session is asked once in its life,
-  // whichever trigger asked (design D3). Its switch is its own: `--nudge-ratio 0` turns off only the
-  // size nudge, `--idle-minutes 0` only the warm-idle one.
+  // Arm nudge — due when this session has no FRESH marker (none, or a stale one), is idle, not opted
+  // out, and has reached nudge-ratio × threshold (default 1.0: the ask comes at the threshold, so the
+  // handoff is the last act before the clear). Each ask is recorded (base, .2, .3) before anything is
+  // typed; a session is asked again only after it answered (its marker is newer than the latest
+  // record), at most MAX_NUDGES times. The warm-idle trigger asks through the same records (D3).
+  // `--nudge-ratio 0` turns off only the size ask, `--idle-minutes 0` only the warm-idle one.
   const nudgeRatio = Number(opts.nudgeRatio ?? DEFAULT_NUDGE_RATIO)
   let nudge = null
   if ((nudgeRatio > 0 || warm.reason !== "off") && s8 !== "ismeretlen") {
     const ok = Object.fromEntries(gates.map((g) => [g.name, g.ok]))
     const at = nudgeRatio > 0 ? Math.round(threshold * nudgeRatio) : null
-    const recorded = existsSync(join(dir, NUDGE_PREFIX + s8))
-    const why = ok.marker ? "armed — no nudge needed"
-      : recorded ? `already nudged (${NUDGE_PREFIX}${s8})`
+    const answered = records.latest != null && markerMtime != null && markerMtime > records.latest.mtime
+    const stale = markerMtime != null && !markerFresh
+    const why = ok.marker ? "armed with a fresh handoff — no nudge needed"
       : !ok.optout ? "opted out"
+      : records.count >= MAX_NUDGES ? `asked ${MAX_NUDGES} times and the handoff is still ${stale ? "stale" : "missing"} — left to the native compaction`
+      : records.count > 0 && !answered ? `asked (${records.latest.name}) and not answered — not asking again`
       : tok.tokens == null ? "context size unknown"
       : warm.due ? null
       : warm.late ? `${WARM_IDLE}: ${warm.reason}`
@@ -485,8 +515,10 @@ export function evaluate(opts = {}) {
       : !ok.idle ? `not idle: ${idle.reason}`
       : null
     const nudgeTrigger = why === null ? (warm.due ? WARM_IDLE : "size") : null
-    nudge = { due: why === null, at, tokens: tok.tokens, trigger: nudgeTrigger,
-      reason: why ?? (nudgeTrigger === WARM_IDLE ? `unarmed, ${WARM_IDLE}: ${warm.reason}, never nudged` : `unarmed at ${tok.tokens} ≥ ${at}, idle, never nudged`) }
+    const what = stale ? `stale handoff (${Math.round(lagSec / 60)} min behind)` : "unarmed"
+    nudge = { due: why === null, at, tokens: tok.tokens, trigger: nudgeTrigger, record: why === null ? records.next : null,
+      ask: records.count + 1, of: MAX_NUDGES,
+      reason: why ?? (nudgeTrigger === WARM_IDLE ? `${what}, ${WARM_IDLE}: ${warm.reason}` : `${what} at ${tok.tokens} ≥ ${at}, idle`) }
   }
   return { eligible, action, trigger: eligible ? trigger : null, sessionId: s8, threshold, request, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
     nudge, idle: warm, gates, at: new Date().toISOString() }

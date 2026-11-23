@@ -77,13 +77,14 @@ test("AC-5: a turn that is not idle is never due for idle, however old the last 
   assert.equal(r.eligible, false)
 })
 
-test("an armed handoff OLDER than the last work is not cleared for idle — measured in the audit: 6 of 15 clear pairs had > 30 min of work after the last handoff write", () => {
+test("an armed handoff OLDER than the last work is not cleared for idle — the marker gate calls it stale and the session is asked for a fresh one (6 of 15 audited clear pairs had > 30 min of work after the last handoff write)", () => {
   const s = session({ tokens: 250_000, idleMin: 49 })
   arm(s.dir, s.lastAt - 120 * MIN)
   const r = run(s)
-  assert.equal(r.idle.due, false)
-  assert.match(r.idle.reason, /older than the last work/)
   assert.equal(r.eligible, false)
+  assert.match(r.gates.find((g) => g.name === "marker").detail, /STALE: the session worked 120 min after its handoff/)
+  assert.equal(r.nudge.due, true, r.nudge.reason)
+  assert.equal(r.nudge.trigger, "warm-idle")
 })
 
 test("a handoff written after a warm-idle nudge is cleared at once, not 48 minutes later — the nudge's own turn restarts the idle clock", () => {

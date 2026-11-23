@@ -18,7 +18,7 @@ export const S8 = SID.replace(/-/g, "").slice(0, 8)
 export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       // "❯ " — empty input row
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
-export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null,
+export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
   screen = IDLE_SCREEN, extraArgs = [], seconds = 5 }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
@@ -34,7 +34,10 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
     message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: tokens } },
   }) + "\n")
   const record = join(hd, `.handoff-nudged-${S8}`)
-  if (nudgeRecord) writeFileSync(record, nudgeRecord)
+  if (nudgeRecord) {
+    writeFileSync(record, nudgeRecord)
+    if (nudgeRecordAgeMin != null) { const t = new Date(Date.now() - nudgeRecordAgeMin * 60_000); utimesSync(record, t, t) }
+  }
   if (marker) {
     writeFileSync(join(hd, "1123-aaaa--thread.md"), "# thread\n")
     const m = join(hd, `.written-${S8}`)
@@ -59,5 +62,6 @@ exit 0
   return {
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
     log, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
+    record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }
 }

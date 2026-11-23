@@ -87,14 +87,22 @@ There is no systemd: keep the watcher in its own tmux session (as above), or use
 for reboot survival. First run: add `--dry-run` and read the log — `dry … ELIGIBLE — would /clear
 pane …` proves the session records and the pane lookup work on that machine.
 
-## Arm nudge: the watcher asks once for the handoff
+## The handoff runs right before the clear
 
-A session with no handoff marker can never be cleared — and in one consumer tree 80 of 141 watched
-sessions never wrote one (2026-11-23). So when a session is idle, unarmed, not opted out, and at ≥ 60 %
-of the threshold (`--nudge-ratio R` on the watcher), the watcher types `/handoff` into it **once**. The
-record `.set/handoff/.handoff-nudged-<session8>` is created before typing and is never overwritten: no
-session is nudged twice. Same presence gate as a clear; a working turn is waited out. Off:
-`--arm-nudge false` (turns off the size nudge only; the warm-idle one below has its own switch).
+A clear carries only what the handoff holds. So the marker gate passes only for a FRESH handoff: the
+session's last assistant record may trail its marker by at most `--request-window` (600 s). A handoff
+written earlier and followed by more work is **stale**. Its clear is refused, on the size, request,
+warm-idle and compact paths alike.
+
+The watcher asks for the handoff **at the threshold** (`--nudge-ratio`, default 1.0). An idle session
+with no fresh marker gets `/handoff` typed, and the clear follows at the next idle verdict. Each ask is
+recorded before typing, as `.handoff-nudged-<session8>`, then `.2`, `.3`. A session is asked again only
+after it answered the previous ask, and at most 3 times; after that it is left to the native compaction,
+and the log says so.
+
+Measured 2026-11-23: 80 of 141 watched sessions in one consumer tree never armed. The former 0.6 ratio
+asked at 240k, and the 400k clear then lost everything done in between. Same presence gate as a clear;
+a working turn is waited out. Off: `--arm-nudge false` (the size ask only; warm-idle has its own switch).
 
 ## Warm-idle rotation: the second trigger
 
