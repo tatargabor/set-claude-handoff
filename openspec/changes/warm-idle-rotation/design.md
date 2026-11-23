@@ -95,6 +95,21 @@ compact it anyway and a summary beats nothing — so the late case logs and leav
 The `/handoff` typed by the idle trigger writes the same `.handoff-nudged-<session8>` record. A
 session is asked for its handoff once in its life, whichever trigger asked.
 
+### D5 — An armed handoff must be the session's last act (added at apply)
+A marker armed hours ago, followed by more work, would let the idle trigger clear away everything done
+since. The request path already refuses this case (`handoff not the last act`). The warm-idle trigger
+uses the same window (`--request-window`, default 600 s), measured between the marker and the last
+assistant record. Evidence from the consumer audit of 2026-11-23: in 6 of 15 automatic-clear pairs the
+predecessor worked more than 30 min after its last handoff write. This rule only refuses; it never
+types.
+
+### D6 — A warm-idle nudge, once answered, clears at once (added at apply)
+Answering the nudge is a turn, and that turn restarts the idle clock. Read literally, AC-2 would then
+clear the session only 48 minutes later, which is a second, colder rotation. So the warm-idle nudge
+writes its record with the word `warm-idle`, and a marker newer than that record makes the trigger due
+at the next idle verdict. The floor, idle turn, opt-out and last-act checks still apply. A size
+nudge's record carries no such word and does not shorten the clock.
+
 ### D4 — The floor is 200k because the runtime's floor is
 No idle compaction below 200k was seen in a month; below it the session survives the cold wake and
 the cost case is weaker.

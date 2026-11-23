@@ -29,3 +29,11 @@ logged with the reason.
 #### Scenario: A working turn is never interrupted for idle
 - **WHEN** the session's turn state is not idle
 - **THEN** the warm-idle trigger is not evaluated as due
+
+#### Scenario: An armed handoff older than the last work
+- **WHEN** a session at 250k tokens, idle 49 minutes, holds a marker written two hours before its last assistant record
+- **THEN** nothing is typed, and the verdict says the handoff is older than the last work
+
+#### Scenario: A warm-idle nudge, answered
+- **WHEN** a session was nudged by the warm-idle trigger and its marker is newer than the nudge record, with the turn ended and the context above the floor
+- **THEN** the session is due for `/clear` at once, without waiting for another idle period

@@ -7,8 +7,8 @@
 
 ## 2. Gate
 
-- [ ] 2.1 `clear-gate.mjs`: an `idle` verdict — age of the last assistant record, `--idle-minutes` (default 48), `--idle-floor` (default 200000), the 54-minute stop; JSON carries `idle.due`, `idle.minutes`, `idle.reason` [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 2.2 Tests: due at 48 min / 250k; not due below the floor; not due when the turn is running; late at 55 min without a marker [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 2.1 `clear-gate.mjs`: an `idle` verdict — age of the last assistant record, `--idle-minutes` (default 48), `--idle-floor` (default 200000), the 54-minute stop; JSON carries `idle.due`, `idle.minutes`, `idle.reason` [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 2.2 Tests: due at 48 min / 250k; not due below the floor; not due when the turn is running; late at 55 min without a marker [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
 
 ## 3. Watcher
 

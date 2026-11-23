@@ -56,6 +56,21 @@
  *                   clear could never fire. `.handoff-nudged-<session8>` in the handoff dir records
  *                   the nudge; once it exists the nudge is never due again for that session. Idle and
  *                   opt-out hold for it like for a clear. `--nudge-ratio 0` turns it off.
+ *   Warm-idle   — the SECOND trigger beside the size threshold (change warm-idle-rotation). The runtime
+ *                   compacts an idle 200k+ session by itself at ~53.8 min after its last request
+ *                   (documented as idle compaction; measured: ≈ 35 % of one product family's auto
+ *                   compactions, every one under 250k). The verdict's `idle` {due, minutes, floor,
+ *                   late, reason} is due for a session that meets all of these:
+ *                   · its turn has ended;
+ *                   · it is at ≥ --idle-floor tokens (default 200 000, the runtime's own floor);
+ *                   · it is not opted out;
+ *                   · either it has been idle for ≥ --idle-minutes (default 48) but < 54, or it
+ *                     answered a warm-idle nudge (its marker is newer than the record).
+ *                   A due verdict lets gate 1 pass below the threshold, like a valid request; an
+ *                   unarmed session gets the arm nudge instead (same record, so it is asked once).
+ *                   An armed session is due only when its handoff was its LAST act: an older marker
+ *                   would clear away the work done since. Past 54 min `late` is set and nothing is
+ *                   typed. The verdict's `trigger` names size | request | warm-idle.
  *   5. optout     — two kill-switch scopes: `.no-autoclear` in the handoff dir disables the
  *                   whole tree (project level); `.no-autoclear-<session8>` disables one
  *                   session. Presence blocks the clear whatever else holds — the user creates
@@ -67,6 +82,7 @@
  *        [--dir <handoffDir>] [--transcript <path>] [--tokens-file <path>] [--json] [--dry-run]
  *        [--compact-on-background true|false] [--compact-threshold N]
  *        [--request-ttl SEC] [--request-window SEC] [--nudge-ratio R]
+ *        [--idle-minutes M] [--idle-floor N]
  *   The verdict's `action` is `clear` (all gates hold), `compact` (opt-in: only background work refuses
  *   the clear; the session keeps its agents) or null.
  *   A hook-style JSON on stdin (session_id, transcript_path, cwd) is also accepted.
@@ -109,6 +125,17 @@ export const DEFAULT_COMPACT_THRESHOLD = 400_000
 // Background work survives /clear on 2.1.330 (measured 2026-11-23) — blocking on it is opt-in.
 export const DEFAULT_BACKGROUND_WORK_BLOCKS = false
 const BACKGROUND_NONE_PATTERN = "none left|none running|no (?:background|running)|nem fut(?: semmi)?|nincs(?: futó)? háttér"
+// Warm-idle rotation (change warm-idle-rotation, measured 2026-11-23): the runtime's own idle
+// compaction (documented: `idleCompaction`, floor CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS = 200 000)
+// starts at ~53.8 min after the last request and writes its record at ~54.8. A session idle for
+// --idle-minutes with ≥ --idle-floor tokens is handed off and cleared before that, on a warm cache.
+// Past IDLE_STOP_MINUTES nothing is typed for idle: the compaction is already under way.
+export const DEFAULT_IDLE_MINUTES = 48
+export const DEFAULT_IDLE_FLOOR = 200_000
+export const IDLE_STOP_MINUTES = 54
+// The nudge record's trigger word: a handoff written after a warm-idle nudge is cleared at once,
+// not another 48 minutes later (the nudge's own turn restarts the idle clock).
+export const WARM_IDLE = "warm-idle"
 
 export function session8(sessionId) {
   return String(sessionId ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "ismeretlen"
@@ -227,6 +254,59 @@ export function transcriptIdle(path, window = 200) {
   return { idle: true, reason: "turn ended, nothing pending" }
 }
 
+/**
+ * When the last assistant record was written (ms), or null. This is the clock the runtime's idle
+ * compaction runs on (the age of the last request), so the warm-idle trigger reads it here and not
+ * from the process or the pane, which would measure the human.
+ */
+export function lastAssistantAt(path, window = 400) {
+  if (!path || !existsSync(path)) return null
+  let lines
+  try { lines = readFileSync(path, "utf8").trimEnd().split("\n").slice(-window) } catch { return null }
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let e; try { e = JSON.parse(lines[i]) } catch { continue }
+    if (e?.type !== "assistant") continue
+    const t = Date.parse(e.timestamp ?? "")
+    if (Number.isFinite(t)) return t
+  }
+  return null
+}
+
+/**
+ * The warm-idle verdict. It is due when ALL of these hold:
+ * - the turn has ended;
+ * - the context is at least the floor;
+ * - the session is not opted out;
+ * - one of two paths applies:
+ *   · the last request is ≥ idleMinutes and < IDLE_STOP_MINUTES old;
+ *   · a warm-idle nudge was answered: the marker is newer than the nudge record.
+ * An ARMED session is only due when its handoff was its last act. A marker older than the last
+ * work would clear away the work done since, and the request path refuses exactly that.
+ */
+export function warmIdleVerdict({ minutesOpt, floor, tokens, turnIdle, turnReason, optoutOk, lastAt, now,
+  markerMtime, nudgeRecord, lastActWindowSec }) {
+  const base = { due: false, minutes: null, floor, late: false }
+  if (!(minutesOpt > 0) || !(floor > 0)) return { ...base, reason: "off" }
+  const minutes = lastAt == null ? null : Math.round(((now - lastAt) / 60_000) * 10) / 10
+  const out = (reason, extra = {}) => ({ ...base, minutes, reason, ...extra })
+  const answered = markerMtime != null && nudgeRecord?.warm === true && markerMtime >= nudgeRecord.mtime
+  if (minutes == null) return out("no timestamped assistant record")
+  if (!answered && minutes < minutesOpt) return out(`idle ${minutes} min < ${minutesOpt}`)
+  if (!turnIdle) return out(`turn not idle: ${turnReason}`)
+  if (tokens == null) return out("context size unknown")
+  if (tokens < floor) return out(`${tokens} < floor ${floor}`)
+  if (!optoutOk) return out("opted out")
+  if (!answered && minutes >= IDLE_STOP_MINUTES) {
+    return out(`warm window missed: idle ${minutes} min ≥ ${IDLE_STOP_MINUTES}${markerMtime == null ? " with no armed handoff" : ""} — the runtime's idle compaction is under way; nothing typed`, { late: true })
+  }
+  if (markerMtime != null && lastAt - markerMtime > lastActWindowSec * 1000) {
+    return out(`armed handoff is ${Math.round((lastAt - markerMtime) / 60_000)} min older than the last work — a clear would lose that work; write a fresh handoff`)
+  }
+  return out(answered
+    ? `handoff written after the ${WARM_IDLE} nudge, ${tokens} ≥ floor ${floor}, turn ended`
+    : `idle ${minutes} min ≥ ${minutesOpt}, ${tokens} ≥ floor ${floor}, turn ended`, { due: true })
+}
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 /**
  * The clear request for this session, if any: the session's own file first, then `-any`.
@@ -301,7 +381,27 @@ export function evaluate(opts = {}) {
     else if (afterSec > windowSec) refuse("handoff not the last act", `the session worked ${Math.round(afterSec)}s after its handoff (> ${windowSec}s) — that work is not in ${h.name}`)
     else { request = { file: req.file, valid: true, next: req.next, from: req.from, at: req.at }; reqDetail = `; request ${req.file} next=${req.next} from=${req.from} (handoff ${Math.round(afterSec)}s before the last transcript write)` }
   }
-  add("tokens", over || request?.valid === true, tokDetail + reqDetail)
+  // Warm-idle — the second trigger. It lets gate 1 pass below the threshold, the way a valid request
+  // does. Every other gate still holds, so an unarmed session is nudged (below), never cleared.
+  const now = Number(opts.now ?? Date.now())
+  const turn = transcriptIdle(transcriptPath)
+  const optoutEarly = !existsSync(join(dir, ".no-autoclear")) && !(s8 !== "ismeretlen" && existsSync(join(dir, `.no-autoclear-${s8}`)))
+  const nudgePath = join(dir, NUDGE_PREFIX + s8)
+  let nudgeRecord = null
+  if (s8 !== "ismeretlen" && existsSync(nudgePath)) {
+    try { nudgeRecord = { mtime: statSync(nudgePath).mtimeMs, warm: readFileSync(nudgePath, "utf8").includes(WARM_IDLE) } } catch { /* unreadable ⇒ not a warm nudge */ }
+  }
+  const warm = warmIdleVerdict({
+    minutesOpt: Number(opts.idleMinutes ?? DEFAULT_IDLE_MINUTES), floor: Number(opts.idleFloor ?? DEFAULT_IDLE_FLOOR),
+    tokens: tok.tokens, turnIdle: turn.idle, turnReason: turn.reason, optoutOk: optoutEarly,
+    lastAt: lastAssistantAt(transcriptPath), now,
+    markerMtime: s8 !== "ismeretlen" && existsSync(markerPathEarly) ? statSync(markerPathEarly).mtimeMs : null,
+    nudgeRecord, lastActWindowSec: Number(opts.requestWindowSec ?? DEFAULT_REQUEST_WINDOW_SEC),
+  })
+  const warmDetail = warm.due || warm.late || (warm.minutes != null && warm.minutes >= Number(opts.idleMinutes ?? DEFAULT_IDLE_MINUTES))
+    ? `; ${WARM_IDLE}: ${warm.reason}` : ""
+  add("tokens", over || request?.valid === true || warm.due, tokDetail + reqDetail + warmDetail)
+  const trigger = over ? "size" : request?.valid === true ? "request" : warm.due ? WARM_IDLE : null
 
   // 2. marker — this session's own. The s8 suffix makes it per-session-id (another session's
   //    marker never matches); the start comparison stays as ANNOUNCEMENT only: measured
@@ -324,7 +424,7 @@ export function evaluate(opts = {}) {
   add("marker", markerOk, markerDetail)
 
   // 3. idle
-  const idle = transcriptIdle(transcriptPath)
+  const idle = turn
   add("idle", idle.idle, idle.reason)
 
   // 4. background — declared none, or the profile measured its relaxation
@@ -365,23 +465,31 @@ export function evaluate(opts = {}) {
   }
   // Arm nudge — due when this session has no marker yet, is idle, not opted out, never nudged, and
   // has reached nudge-ratio × threshold: early enough that the handoff exists before the limit.
+  // The warm-idle trigger asks through the SAME record, so a session is asked once in its life,
+  // whichever trigger asked (design D3). Its switch is its own: `--nudge-ratio 0` turns off only the
+  // size nudge, `--idle-minutes 0` only the warm-idle one.
   const nudgeRatio = Number(opts.nudgeRatio ?? DEFAULT_NUDGE_RATIO)
   let nudge = null
-  if (nudgeRatio > 0 && s8 !== "ismeretlen") {
+  if ((nudgeRatio > 0 || warm.reason !== "off") && s8 !== "ismeretlen") {
     const ok = Object.fromEntries(gates.map((g) => [g.name, g.ok]))
-    const at = Math.round(threshold * nudgeRatio)
+    const at = nudgeRatio > 0 ? Math.round(threshold * nudgeRatio) : null
     const recorded = existsSync(join(dir, NUDGE_PREFIX + s8))
     const why = ok.marker ? "armed — no nudge needed"
       : recorded ? `already nudged (${NUDGE_PREFIX}${s8})`
       : !ok.optout ? "opted out"
       : tok.tokens == null ? "context size unknown"
+      : warm.due ? null
+      : warm.late ? `${WARM_IDLE}: ${warm.reason}`
+      : at == null ? `size nudge off; ${WARM_IDLE}: ${warm.reason}`
       : tok.tokens < at ? `${tok.tokens} < ${at}`
       : !ok.idle ? `not idle: ${idle.reason}`
       : null
-    nudge = { due: why === null, at, tokens: tok.tokens, reason: why ?? `unarmed at ${tok.tokens} ≥ ${at}, idle, never nudged` }
+    const nudgeTrigger = why === null ? (warm.due ? WARM_IDLE : "size") : null
+    nudge = { due: why === null, at, tokens: tok.tokens, trigger: nudgeTrigger,
+      reason: why ?? (nudgeTrigger === WARM_IDLE ? `unarmed, ${WARM_IDLE}: ${warm.reason}, never nudged` : `unarmed at ${tok.tokens} ≥ ${at}, idle, never nudged`) }
   }
-  return { eligible, action, sessionId: s8, threshold, request, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
-    nudge, gates, at: new Date().toISOString() }
+  return { eligible, action, trigger: eligible ? trigger : null, sessionId: s8, threshold, request, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
+    nudge, idle: warm, gates, at: new Date().toISOString() }
 }
 
 function main(argv) {
@@ -402,6 +510,8 @@ function main(argv) {
     else if (a === "--request-ttl") o.requestTtlSec = argv[++i]
     else if (a === "--request-window") o.requestWindowSec = argv[++i]
     else if (a === "--nudge-ratio") o.nudgeRatio = argv[++i]
+    else if (a === "--idle-minutes") o.idleMinutes = argv[++i]
+    else if (a === "--idle-floor") o.idleFloor = argv[++i]
     else { console.error(`unknown flag: ${a}`); return 2 }
   }
   if (!o.sessionId || !o.transcriptPath) {
@@ -418,6 +528,8 @@ function main(argv) {
     for (const g of result.gates) console.log(`${g.ok ? "PASS" : "FAIL"}  ${g.name.padEnd(11)} ${g.detail}`)
     console.log(`${result.eligible ? "ELIGIBLE" : "NOT ELIGIBLE"} — the gate never clears; the executor decides`)
     if (result.nudge?.due) console.log(`NUDGE due — ${result.nudge.reason}: the executor may type /handoff once`)
+    if (result.trigger) console.log(`TRIGGER ${result.trigger}`)
+    if (result.idle?.late) console.log(`WARM-IDLE missed — ${result.idle.reason}`)
     if (result.action === "compact") console.log(`ACTION compact — only background work refuses the clear (≥ ${result.compactThreshold})`)
   }
   return 0
