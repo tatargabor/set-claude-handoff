@@ -260,3 +260,21 @@ test("M5: no auto-clear watcher in the project ⇒ no handoff demand at the limi
   assert.equal(run("post"), "", "no early handoff warning without a watcher")
   assert.doesNotMatch(JSON.parse(run("stop")).reason, /Write the handoff/)
 })
+
+test("the start-filter exclusion is surfaced to the session ONCE through keep-going's post hook, with the resume command — measured 2026-11-23: one tree's only working session was skipped 2858 times and had no word of it (change started-after-self-exclusion)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kg-excl-"))
+  const hd = join(dir, ".set/handoff"); mkdirSync(hd, { recursive: true })
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "go" } }) + "\n")
+  writeFileSync(join(hd, ".excluded-eeee1111"),
+    "2026-11-23T20:15:00Z claude --resume eeee1111-2222-3333-4444-555566667777\nExcluded by the start filter: started before --started-after.\n")
+  const run = () => execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "post"], {
+    input: JSON.stringify({ session_id: "eeee1111-2222-3333-4444-555566667777", cwd: dir, transcript_path: tr }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli" } })
+  const out = JSON.parse(run())
+  assert.match(out.hookSpecificOutput.additionalContext, /claude --resume eeee1111-2222-3333-4444-555566667777/, "the way out, verbatim from the record's line 1")
+  assert.match(out.hookSpecificOutput.additionalContext, /no automatic clear/, "what being excluded means")
+  assert.equal(run(), "", "said once")
+  assert.equal((readFileSync(join(hd, "keep-going.log"), "utf8").match(/excluded by --started-after/g) ?? []).length, 1)
+  assert.match(readFileSync(join(hd, ".keepgoing-eeee1111.json"), "utf8"), /"excludedSaid":true/, "the state file is the once-guard")
+})
