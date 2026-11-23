@@ -176,6 +176,16 @@ compactions measured, and no size threshold reaches them. So a session idle for 
 
 It never presses Escape for idle. Off: `--idle-minutes 0`.
 
+**Log hygiene.** The per-pass `no` verdict line is written only when the verdict's shape
+changes (`$failed` with every run of digits replaced by `N` — a moving token count or freshness
+age is not a change) or 30 minutes after that session's last written line (a heartbeat, so a
+tail still shows the session is watched); FIRE, NUDGE, request, warm-idle and skip lines are
+never deduped. As the safety net, `--log-max-kb` (default 5120) rotates the log at watcher start
+and at the top of every pass: past the cap `auto-clear.log` is renamed to `auto-clear.log.1`
+(any old `.1` replaced) and the fresh file's first line names the rotation and the size.
+Measured 2026-11-23: one consumer tree's log had grown to 47 MB / 236 385 lines, one session's
+identical verdict appearing 879× in its last 3000 lines.
+
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
 (`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —
 the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the

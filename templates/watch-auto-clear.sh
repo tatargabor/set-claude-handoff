@@ -9,7 +9,9 @@
 # types, and it types only on an eligible verdict.
 #
 # Safety properties (kept even when armed):
-#   - every gate verdict is logged, pass or fail — absence is announced, never silent;
+#   - every gate verdict is logged, pass or fail — absence is announced, never silent; the
+#     repeated "no" verdict is deduped to shape changes plus a 30-min heartbeat (measured
+#     2026-11-23: one consumer log grew to 47 MB, one session's verdict 879× in 3000 lines);
 #   - --dry-run evaluates and logs without ever sending keys;
 #   - --started-after drops sessions started before a moment (e.g. before the clear-reload
 #     hook was wired into settings — clearing a session that cannot reload is the one really
@@ -56,7 +58,7 @@
 #   watch-auto-clear.sh --dir <projectRoot> [--interval SEC] [--threshold N] [--freshness SEC]
 #     [--background-work-blocks true|false] [--started-after ISO] [--gate PATH] [--dry-run]
 #     [--auto-continue PROMPT] [--continue-delay SEC] [--autopilot]
-#     [--compact-on-background true|false] [--compact-threshold N]
+#     [--compact-on-background true|false] [--compact-threshold N] [--log-max-kb KB]
 #
 #   --background-work-blocks   default false since 2026-11-23: background tasks and subagents survive
 #                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
@@ -83,6 +85,12 @@
 #                 survive; the session's marker is removed after it, so the next one needs a fresh
 #                 handoff. Never presses Escape for a compact: a working turn is waited out.
 #
+#   --log-max-kb KB   size rotation, the safety net under the "no" dedupe: at watcher start and at
+#                 the top of every pass, a log past KB kilobytes (default 5120) is renamed to
+#                 auto-clear.log.1 — any old .1 replaced — and the fresh file's first line names
+#                 the rotation and the size. Measured 2026-11-23: one consumer log had grown to
+#                 47 MB / 236 385 lines.
+#
 #   --auto-continue default   use the package's own continue prompt (DEFAULT_CONTINUE below).
 #
 #   --autopilot   every automatic continuation first runs .claude/hooks/autopilot/drift-guard.mjs
@@ -95,7 +103,7 @@ set -u
 
 ARM_NUDGE="true"; NUDGE_RATIO=""; IDLE_MINUTES=""; IDLE_FLOOR=""
 WARM_MISSED=" "   # sessions whose missed warm window was logged (a string set: macOS bash 3.2 has no -A)
-DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0
+DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0; LOG_MAX_KB=""
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
 DEFAULT_CONTINUE="Autopilot continue after an automatic /clear (auto-continue): read the reloaded handoff file in full - it is THIS session's own thread. Continue with its CURRENT next step - a later UPDATE section supersedes the original next-steps list, and a step marked done is never redone. A project-level goal or plan file is context, not a work queue: never take over a step or lane another session owns. Stop and wait only at a decision that the thread's recorded human direction does not already answer - ask it on its own line starting with NEED INPUT: so the keep-going hook lets the stop through."
@@ -117,6 +125,7 @@ while [ $# -gt 0 ]; do
     --nudge-ratio) NUDGE_RATIO="$2"; shift 2;;
     --idle-minutes) IDLE_MINUTES="$2"; shift 2;;
     --idle-floor) IDLE_FLOOR="$2"; shift 2;;
+    --log-max-kb) LOG_MAX_KB="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -153,6 +162,71 @@ if [ -n "$AFTER" ]; then
 fi
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+# Per-watcher memory for the "no" dedupe below: one small file per watched session, under a
+# per-watcher temp dir (a string set would need declare -A, which macOS bash 3.2 lacks).
+NO_DEDUPE_DIR="${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/set-handoff-no-dedupe-$$"
+# A failed creation silently disabled the dedupe — absence is announced, never silent.
+mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || { log "warn  no-dedupe: cannot create $NO_DEDUPE_DIR — verdict lines repeat per pass"; NO_DEDUPE_DIR=""; }
+# The dir must not outlive the watcher: otherwise one dir per lifetime accumulates in the temp
+# dir. The EXIT trap covers a normal end; INT TERM HUP clean up AND exit — a trap replaces the
+# signal's default terminate, so the explicit exit is what still ends the watcher.
+cleanup_no_dedupe() { [ -n "$NO_DEDUPE_DIR" ] && rm -rf "$NO_DEDUPE_DIR" 2>/dev/null; return 0; }
+trap cleanup_no_dedupe EXIT
+trap 'cleanup_no_dedupe; exit 0' INT TERM HUP
+
+# The verdict's SHAPE: $failed with every run of digits replaced by N — so a moving token count
+# or freshness age (the measured churn: "tokens:184211 < 400000 … (-1s old)") is not a change.
+# The second expression folds N.N into N: the gate prints decimal ages ("idle 55.1 min ≥ 54"),
+# and a ticking tenth of a minute is the same moving number, not a change. \{1,\}, not \+ — BSD sed.
+verdict_shape() { printf '%s' "$1" | sed -e 's/[0-9][0-9]*/N/g' -e 's/\(N\)\(\.N\)\{1,\}/\1/g'; }
+
+# The per-pass "no" line is written only when THIS session's shape changed, or NO_HEARTBEAT_S
+# passed since its last written line (a heartbeat, so a tail still shows the session is watched).
+# The memory is per watcher: two watchers on one tree each keep their own and each log their own
+# line. Every other line (FIRE, NUDGE, request, warm-idle, skip) is never deduped. rc 0 = write it.
+NO_HEARTBEAT_S=1800
+no_log_due() { # $1 = sid, $2 = shape
+  local f now last seen
+  [ -n "$NO_DEDUPE_DIR" ] || return 0
+  f="$NO_DEDUPE_DIR/$(printf '%s' "$1" | tr -cd 'a-zA-Z0-9')"
+  [ -n "$f" ] || return 0
+  now=$(date +%s)
+  last=""; seen=""
+  if [ -f "$f" ]; then
+    read -r last seen < "$f" 2>/dev/null
+    case "$last" in ''|*[!0-9]*) last="" ;; esac
+    if [ -n "$last" ] && [ "$seen" = "$2" ] && [ $((now - last)) -lt "$NO_HEARTBEAT_S" ]; then
+      return 1
+    fi
+  fi
+  if printf '%s %s\n' "$now" "$2" > "$f" 2>/dev/null && [ -s "$f" ]; then return 0; fi
+  # A failed memory write degrades to the old behavior (repeat per pass) — announced, not silent.
+  log "warn  no-dedupe: cannot write $f — the verdict line repeats until this works"
+  return 0
+}
+
+# Size rotation — the safety net under the dedupe above (same measurement: one consumer log
+# reached 47 MB / 236 385 lines). At watcher start and at the top of every pass: past
+# --log-max-kb, auto-clear.log becomes .1 (any old .1 replaced) and the fresh file's first line
+# names the rotation and the size. `wc -c <` is the portable size check.
+LOG_MAX_KB="${LOG_MAX_KB:-5120}"
+case "$LOG_MAX_KB" in ''|*[!0-9]*) echo "--log-max-kb must be an integer (KB), got: $LOG_MAX_KB" >&2; exit 2;; esac
+# 0 is a valid integer but rotates every pass — the log never grows past one pass's lines.
+[ "$LOG_MAX_KB" -gt 0 ] || { echo "--log-max-kb must be a positive integer (KB), got: $LOG_MAX_KB" >&2; exit 2; }
+log_rotate() {
+  local bytes
+  [ -f "$LOG" ] || return 0
+  bytes=$(wc -c < "$LOG" 2>/dev/null) || return 0
+  bytes=$((bytes))   # BSD wc pads with spaces; arithmetic strips them
+  [ "$bytes" -gt $((LOG_MAX_KB * 1024)) ] || return 0
+  if mv -f "$LOG" "$LOG.1" 2>/dev/null; then
+    log "rotate  auto-clear.log reached ${bytes} bytes (> ${LOG_MAX_KB} KB) — the previous content is in auto-clear.log.1"
+  else
+    log "warn  rotate failed — auto-clear.log stays above ${LOG_MAX_KB} KB"
+  fi
+}
+log_rotate
 
 if ! command -v tmux >/dev/null; then
   if python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
@@ -582,6 +656,7 @@ heartbeat() {
 }
 
 while :; do
+  log_rotate
   heartbeat
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
@@ -612,7 +687,7 @@ while :; do
     request_refused_cleanup "$tree" "$verdict" "$sid"
     trigger=$(printf '%s' "$verdict" | jq -r '.trigger // empty')
     if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
-      log "no    $sid  $failed"
+      no_log_due "$sid" "$(verdict_shape "$failed")" && log "no    $sid  $failed"
       if [ "$(printf '%s' "$verdict" | jq -r '.idle.late // false')" = "true" ] && [ "${WARM_MISSED#* $sid }" = "$WARM_MISSED" ]; then
         WARM_MISSED="$WARM_MISSED$sid "
         log "warm-idle missed  $sid  $(printf '%s' "$verdict" | jq -r '.idle.reason')"

@@ -6,7 +6,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)))
@@ -19,9 +19,13 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5 }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
+  // A temp dir the WATCHER cannot create its no-dedupe dir in (chmod 555 blocks a non-root writer;
+  // node's own tmpdir() here is untouched — only the child env points at this).
+  let roTmp = null
+  if (watcherTmpUnwritable) { roTmp = join(base, "ro-tmp"); mkdirSync(roTmp); chmodSync(roTmp, 0o555) }
   const hd = join(proj, ".set/handoff")
   for (const d of [join(home, ".claude/sessions"), hd, bin]) mkdirSync(d, { recursive: true })
   writeFileSync(join(home, ".claude/sessions", `${PID}.json`),
@@ -46,6 +50,9 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
     if (at) utimesSync(m, at, at)
   }
   const keys = join(base, "keys.log")
+  const logPath = join(hd, "auto-clear.log")
+  if (prefillLogBytes > 0) writeFileSync(logPath, "x".repeat(prefillLogBytes))
+  if (staleLog1) writeFileSync(`${logPath}.1`, "stale\n")
   writeFileSync(join(bin, "tmux"), `#!/usr/bin/env bash
 case "$1" in
   list-panes) printf '%s\\tfake:0.0\\n' ${PID} ;;
@@ -55,13 +62,23 @@ esac
 exit 0
 `)
   chmodSync(join(bin, "tmux"), 0o755)
-  spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
-    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
+  // A detached snippet the test drives a change from MID-run — the fake tmux is not called at all
+  // on a plain "no" pass, so it cannot be the trigger. It sleeps its own lead-in, then runs in
+  // `base` with $HD/$TDIR set and TMPDIR=base (also the watcher's TMPDIR, so snippets can reach
+  // the watcher's own temp state, e.g. its no-dedupe memory, via a set-handoff-no-dedupe-* glob).
+  if (mutate) {
+    spawn("bash", ["-c", mutate], { cwd: base, detached: true, stdio: "ignore",
+      env: { ...process.env, TMPDIR: base, HD: hd, TDIR: tdir } }).unref()
+  }
+  const run = spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
+    env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
   return {
+    status: run.status, stderr: run.stderr ?? "",
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
-    log, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
+    log, log1: existsSync(`${logPath}.1`) ? readFileSync(`${logPath}.1`, "utf8") : null,
+    base, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
     record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }
 }
