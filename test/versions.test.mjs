@@ -97,6 +97,24 @@ test("shippedHashesOf dedupes by NEWEST appearance — with v1 → v2 → v1 the
   assert.deepEqual(shippedHashesOf("f.mjs", { pkgRoot: repo }), [sha256("v2\n"), sha256("v1\n")])
 })
 
+test("shippedHashesOf lists a blob that only a MERGE commit created — `git log --raw` shows no diff for merges by default, so this repo's own merge of two watcher branches left the HEAD blob of watch-auto-clear.sh out of the manifest and the shipped file read as a local edit", () => {
+  const repo = mkdtempSync(join(tmpdir(), "versions-merge-"))
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" })
+  git("init", "-q", "-b", "main")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "t")
+  const commit = (msg) => { git("add", "-A"); git("commit", "-q", "-m", msg) }
+  writeFileSync(join(repo, "f.sh"), "a\nmid\nb\n"); commit("base")
+  git("checkout", "-q", "-b", "side")
+  writeFileSync(join(repo, "f.sh"), "a\nmid\nB\n"); commit("side edits the last line")
+  git("checkout", "-q", "main")
+  writeFileSync(join(repo, "f.sh"), "A\nmid\nb\n"); commit("main edits the first line")
+  git("merge", "-q", "--no-ff", "-m", "merge side", "side") // a clean merge: "A mid B" exists only in the merge commit
+  const head = execFileSync("git", ["-C", repo, "show", "HEAD:f.sh"])
+  assert.equal(head.toString(), "A\nmid\nB\n")
+  assert.equal(shippedHashesOf("f.sh", { pkgRoot: repo }).at(-1), sha256(head), "the merge-made blob must be the newest shipped version")
+})
+
 test("every .mjs template the package carries is in the install table — init installs from the table, so a file missing there silently stops shipping at all", () => {
   const templates = ["templates", "templates/hooks", "templates/autopilot"].flatMap((d) =>
     readdirSync(join(PKG_ROOT, d))

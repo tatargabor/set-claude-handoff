@@ -65,7 +65,12 @@ const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
 export function shippedHashesOf(src, { pkgRoot, git = runGit, hash = sha256 } = {}) {
   // --topo-order keeps parents before children in the newest-first walk, so "first occurrence"
   // below really is a blob's newest appearance even where --follow crosses renames.
-  const out = git(pkgRoot, ["log", "--follow", "--topo-order", "--no-abbrev", "--format=%H", "--raw", "--", src]).toString()
+  // -m: `git log --raw` shows NO diff for a merge commit by default, so a blob that only a merge
+  // created (a conflict resolution, or a clean merge of both sides' edits) was never listed —
+  // measured 2026-11-23 on this repo's own merge of two watcher branches: the HEAD blob of
+  // watch-auto-clear.sh was missing, so the shipped file read as a local edit. -m diffs a merge
+  // against each parent (old git too, unlike --diff-merges); the dedupe absorbs the repeat.
+  const out = git(pkgRoot, ["log", "--follow", "--topo-order", "-m", "--no-abbrev", "--format=%H", "--raw", "--", src]).toString()
   // Dedupe keeps each blob's first occurrence in the NEWEST-first walk — its newest appearance.
   // Deduping after reversing instead keeps the OLDEST appearance, and that is the measured bug:
   // with v1 → v2 → v1 the list came out [v1, v2], so the live v1 file read as a local edit, and
