@@ -10,8 +10,9 @@ transcripts, last 7 days):
 | at 360–380k | 113 | 0.1 min | the size threshold |
 
 The duration split seen earlier is the same split: a 40–50 s compaction is a summary made at that
-moment (idle), a ~30 ms one a precomputed summary (size). The size threshold (default 320k since
-`3c9306b`) is ahead of the size compaction in about half the cases and can never be ahead of the
+moment (idle), a ~30 ms one a precomputed summary (size). The size threshold (default 320k from
+`3c9306b`, 400k from `e4bd96c` with the native window at 550k) is ahead of the size compaction in
+about half the cases at 320k and can never be ahead of the
 idle one. The prompt cache expires after an hour; the idle compaction lands just before it.
 
 ## Goals / Non-Goals

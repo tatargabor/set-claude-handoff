@@ -21,7 +21,7 @@ cache writes. Handing off and clearing while the cache is still warm removes bot
 - **Relative size threshold (measured first):** the clear threshold becomes the session's own
   compaction point minus a margin — the point from the statusline payload's context window size
   times the measured trigger ratio, the margin the p95 of tokens one turn adds. Until the margin is
-  measured, the 320k default stays.
+  measured, the fixed default stays (400k since e4bd96c, owner decision: native window 550k).
 - **Compaction backstop (probe first):** a `PreCompact` hook that writes the handoff when the race is
   lost anyway — only if a probe shows it fires on automatic compaction.
 - The existing arm nudge stays; the warm-idle trigger reuses its record so a session is never asked
