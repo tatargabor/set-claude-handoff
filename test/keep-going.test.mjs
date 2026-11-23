@@ -204,3 +204,24 @@ test("a transcript over 512 MB is read by its tail — measured in a consumer re
   assert.equal(lastAssistantAt(tr), Date.parse(at))
   assert.equal(transcriptIdle(tr).idle, true)
 })
+
+test("H1: a budget that cannot be written lets the stop through — measured in a consumer review 2026-11-08: an unwritable state file restarted the budget on every Stop, 60 blocks of 60 stops", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kg-h1-"))
+  mkdirSync(join(dir, ".set/handoff/.keepgoing-kkkk3333.json"), { recursive: true }) // a directory: writeFileSync fails
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "go" } }) + "\n")
+  const out = execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
+    input: JSON.stringify({ session_id: "kkkk3333-x", cwd: dir, transcript_path: tr, last_assistant_message: "Step done." }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } })
+  assert.equal(out, "", "no block")
+  assert.match(readFileSync(join(dir, ".set/handoff/keep-going.log"), "utf8"), /budget state cannot be written/)
+})
+
+test("H1: keep-going's own nudge is never the last human prompt, even unmarked — it would reset the budget", () => {
+  const lines = [
+    { type: "user", uuid: "human-1", message: { role: "user", content: "fix the tests" } },
+    { type: "user", uuid: "nudge-1", message: { role: "user", content: "[keep-going 3/40] Do not stop here — continue" } },
+  ].map((e) => JSON.stringify(e))
+  assert.equal(lastHumanPrompt(lines), "human-1")
+})
+

@@ -61,6 +61,8 @@ export function lastHumanPrompt(lines) {
     const text = typeof c === "string" ? c
       : Array.isArray(c) && c.every((p) => p.type === "text") ? c.map((p) => p.text).join("\n") : ""
     if (!text.trim() || text.trimStart().startsWith("<")) continue // tool results, command/caveat wrappers
+    // this hook's own nudge, however the runtime marks it: counted as human, it would reset the budget
+    if (text.trimStart().startsWith("[keep-going")) continue
     return e.uuid ?? e.timestamp ?? String(i)
   }
   return null
@@ -178,7 +180,17 @@ async function main(argv) {
     tokens: c.tokens, markerAgeMs: c.markerAgeMs, markerFresh: c.markerFresh, killed: c.killed, human: lastHumanPrompt(c.lines),
     state: readState(c.statePath), opts,
   })
-  try { mkdirSync(c.dir, { recursive: true }); writeFileSync(c.statePath, JSON.stringify(d.state)) } catch { /* budget state lost ⇒ it restarts; logged below */ }
+  if (d.block) {
+    // The budget lives in the state file. If it cannot be written, every Stop starts at 1/40 again,
+    // and the nudge never runs out: measured 60 blocks out of 60 stops in a consumer review
+    // (2026-11-08, H1). A budget that cannot be kept must not be spent, so the stop goes through.
+    try { mkdirSync(c.dir, { recursive: true }); writeFileSync(c.statePath, JSON.stringify(d.state)) } catch (e) {
+      log(c.dir, `allow ${c.s8}  the budget state cannot be written (${e.code || e.message}) — letting the stop through`)
+      return 0
+    }
+  } else {
+    try { mkdirSync(c.dir, { recursive: true }); writeFileSync(c.statePath, JSON.stringify(d.state)) } catch { /* nothing spent */ }
+  }
   log(c.dir, `${d.block ? "block" : "allow"} ${c.s8}  ${d.why}`)
   if (d.block) process.stdout.write(JSON.stringify({ decision: "block", reason: d.reason }) + "\n")
   return 0
