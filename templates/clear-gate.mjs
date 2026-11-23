@@ -31,11 +31,14 @@
  *                   tool_result. A tool awaiting a PERMISSION decision also has no result yet,
  *                   so a pending prompt fails this gate — which is load-bearing: a dialog
  *                   swallows the executor's keystrokes (measured 2026-09-12).
- *   4. background — while `backgroundWorkBlocks` is true (the default — survival of harness
- *                   tasks across /clear is unverified), the armed handoff must DECLARE no
- *                   background work via BACKGROUND_NONE_PATTERN; unresolvable ⇒ blocked
- *                   (fail-closed: an unreadable declaration is not a "none"). Relax only with
- *                   the pilot's recorded measurement (task 6.4 of the change).
+ *   4. background — OFF by default since 2026-11-23: background bash tasks, a `sac wait --once`
+ *                   watch and a background subagent all survived /clear on 2.1.330, and their
+ *                   notifications reached the fresh session
+ *                   (docs/investigations/2026-11-23-background-survival-rerun.md). With
+ *                   `backgroundWorkBlocks: true` (opt-in, fail-closed) the armed handoff must
+ *                   DECLARE no background work via BACKGROUND_NONE_PATTERN; unresolvable ⇒
+ *                   blocked (an unreadable declaration is not a "none"). The gate never looks
+ *                   at processes — only at that declaration.
  *   Clear request — `.clear-request-<session8>` (or `.clear-request-any`, whichever session of the
  *                   tree is eligible first) in the handoff dir: JSON {"next","from","at"}. A valid
  *                   request (parses, non-empty `next`, younger than the request TTL) whose `next`
@@ -82,6 +85,8 @@ const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
 const DEFAULT_COMPACT_THRESHOLD = 350_000
+// Background work survives /clear on 2.1.330 (measured 2026-11-23) — blocking on it is opt-in.
+export const DEFAULT_BACKGROUND_WORK_BLOCKS = false
 const BACKGROUND_NONE_PATTERN = "none left|none running|no (?:background|running)|nem fut(?: semmi)?|nincs(?: futó)? háttér"
 
 export function session8(sessionId) {
@@ -302,9 +307,9 @@ export function evaluate(opts = {}) {
   add("idle", idle.idle, idle.reason)
 
   // 4. background — declared none, or the profile measured its relaxation
-  let bgOk = true, bgDetail = "backgroundWorkBlocks=false — relaxed by measurement/profile"
-  if (opts.backgroundWorkBlocks !== false) {
-    bgOk = false; bgDetail = "blocked: backgroundWorkBlocks=true and survival across /clear is unverified"
+  let bgOk = true, bgDetail = "backgroundWorkBlocks=false — background work survives /clear (measured 2026-11-23)"
+  if ((opts.backgroundWorkBlocks ?? DEFAULT_BACKGROUND_WORK_BLOCKS) === true) {
+    bgOk = false; bgDetail = "blocked: backgroundWorkBlocks=true (opt-in) and the handoff declares no \"none\""
     const h = markerHandoffBody(dir, markerPath)
     if (h) {
       const re = new RegExp(opts.backgroundNonePattern ?? BACKGROUND_NONE_PATTERN, "i")
@@ -353,7 +358,7 @@ function main(argv) {
     else if (a === "--transcript") o.transcriptPath = argv[++i]
     else if (a === "--tokens-file") o.tokensFile = argv[++i]
     else if (a === "--background-none-pattern") o.backgroundNonePattern = argv[++i]
-    else if (a === "--background-work-blocks") o.backgroundWorkBlocks = argv[++i] !== "false"
+    else if (a === "--background-work-blocks") o.backgroundWorkBlocks = argv[++i] === "true"
     else if (a === "--compact-on-background") o.compactOnBackground = argv[++i] !== "false"
     else if (a === "--compact-threshold") o.compactThreshold = argv[++i]
     else if (a === "--request-ttl") o.requestTtlSec = argv[++i]

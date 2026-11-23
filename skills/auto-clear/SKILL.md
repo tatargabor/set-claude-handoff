@@ -66,7 +66,7 @@ it you use the defaults and SAY so.
    tmux new-session -d -s auto-clear-watcher \
      "bash $PWD/.claude/hooks/watch-auto-clear.sh --dir $PWD \
       --started-after $(date -u +%Y-%m-%dT%H:%M:%SZ) --interval 60 \
-      --background-work-blocks <from profile, default true> \
+      --background-work-blocks <from profile, default false> \
       --auto-continue '<from profile, or: default>'"
    ```
    `--started-after now` matters: only sessions started after the reload wiring exists may

@@ -337,3 +337,17 @@ test("next must be a whole token of the handoff, and not trivially short", () =>
   req(dir, ".clear-request-aaaaaaaa", { next: "change-b" })
   assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", transcriptPath: tr, backgroundWorkBlocks: true }).eligible, true)
 })
+
+test("background work no longer blocks by default — measured 2026-11-23 on 2.1.330: bash tasks, a sac wait watch and a subagent survived /clear, while the default block refused every unarmed verdict as 'unverified'", () => {
+  const dir = tmp()
+  const tr = join(dir, "t.jsonl")
+  GOOD_TRANSCRIPT(tr)
+  armMarker(dir, "aaaaaaaa-1111", "0912-aaaa--thread.md", { passed: true })
+  writeFileSync(join(dir, "0912-aaaa--thread.md"), "# handoff — background state not stated anywhere\n")
+  const res = evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr })
+  const bg = res.gates.find((g) => g.name === "background")
+  assert.equal(bg.ok, true, bg.detail)
+  assert.equal(res.eligible, true, JSON.stringify(res.gates))
+  // ...and the opt-in still restores the fail-closed block, from the CLI form the watcher uses too.
+  assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr, backgroundWorkBlocks: true }).eligible, false)
+})

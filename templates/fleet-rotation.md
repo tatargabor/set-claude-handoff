@@ -46,8 +46,8 @@ node .claude/hooks/clear-gate.mjs --session "<sessionId>" \
 ```
 
 `eligible: true` = threshold met, this run's own marker is fresh, turn ended, nothing pending.
-The `backgroundWorkBlocks` flag applies as-is; relax it only with the recorded survival
-measurement (`docs/investigations/2026-09-12-background-survival.md`).
+The `backgroundWorkBlocks` flag defaults to false: background work survived `/clear` on 2.1.330
+(`docs/investigations/2026-11-23-background-survival-rerun.md`); pass true to restore the block.
 
 ## Manager-side sketch (set-core, Python — the wiring lands in that repo)
 

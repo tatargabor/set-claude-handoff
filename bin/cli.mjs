@@ -165,9 +165,9 @@ Next, merge YOURSELF (init never touches these — they are consumer-owned):
    templates/statusline-persist.sh so .set/handoff/.context-tokens gets the live token count.
 
 3. Profile fields (document them in .claude/handoff.profile.md — init does not write profiles):
-     clearThresholdTokens: 500000   tokenFreshnessSeconds: 300   backgroundWorkBlocks: true
+     clearThresholdTokens: 500000   tokenFreshnessSeconds: 300   backgroundWorkBlocks: false
    Pass them to the gate:  node .claude/hooks/clear-gate.mjs --threshold 500000 --freshness 300
-                           --background-work-blocks true --session <id> --transcript <path> --json
+                           --background-work-blocks false --session <id> --transcript <path> --json
 
 The gate only EVALUATES (exit 0, verdict in stdout/--json); an external executor — tmux
 send-keys or the fleet pty owner — reads the verdict and types /clear. See the specs:

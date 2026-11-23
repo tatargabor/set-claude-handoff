@@ -58,6 +58,10 @@
 #     [--auto-continue PROMPT] [--continue-delay SEC] [--autopilot]
 #     [--compact-on-background true|false] [--compact-threshold N]
 #
+#   --background-work-blocks   default false since 2026-11-23: background tasks and subagents survive
+#                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
+#                 `true` makes the gate refuse unless the armed handoff declares "none" (fail-closed).
+#
 #   --compact-on-background true   when ONLY running background work refuses the clear (the gate's
 #                 action `compact`), type /compact instead: the session — and its background agents —
 #                 survive; the session's marker is removed after it, so the next one needs a fresh
@@ -73,7 +77,7 @@
 #   <root>/.set/handoff/auto-clear.log     one line per verdict
 set -u
 
-DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="true"; AFTER=""; GATE=""; DRY=0
+DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
 DEFAULT_CONTINUE="Autopilot continue after an automatic /clear (auto-continue): read the reloaded handoff file in full - it is THIS session's own thread. Continue with its CURRENT next step - a later UPDATE section supersedes the original next-steps list, and a step marked done is never redone. A project-level goal or plan file is context, not a work queue: never take over a step or lane another session owns. Stop and wait only at a decision that the thread's recorded human direction does not already answer - ask it on its own line starting with NEED INPUT: so the keep-going hook lets the stop through."

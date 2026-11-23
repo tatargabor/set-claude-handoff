@@ -70,6 +70,12 @@ Where survival of harness-tracked background work across `/clear` has not been m
 environment, the gate SHALL treat running background work as blocking. An environment MAY relax this only
 with a recorded measurement that such work survives.
 
+Recorded: on Claude Code 2.1.330 (2026-11-23) background bash tasks, a `sac wait --once` watch and a
+background subagent survived `/clear` and notified the fresh session
+(`docs/investigations/2026-11-23-background-survival-rerun.md`). The package default is therefore
+`backgroundWorkBlocks: false`; `true` restores the declaration-based block. Re-run the probe after a
+platform upgrade.
+
 #### Scenario: Background task still running
 - **WHEN** a harness-tracked background task is running and no survival measurement exists
 - **THEN** no automatic clear is issued while it runs
