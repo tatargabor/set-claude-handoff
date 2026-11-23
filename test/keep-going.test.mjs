@@ -142,7 +142,7 @@ test("keep-going as a hook: prints a block decision on an ordinary stop, nothing
   ].map((e) => JSON.stringify(e)).join("\n") + "\n")
   const run = (entry = "cli", extra = []) => execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop", ...extra], {
     input: JSON.stringify({ session_id: "kkkk1111-x", cwd: dir, transcript_path: tr }), encoding: "utf8",
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: entry } })
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: entry } })
   const out = JSON.parse(run())
   assert.equal(out.decision, "block")
   assert.match(out.reason, /keep-going 1\/40/)
@@ -170,7 +170,7 @@ test("keep-going at the limit: a handoff 20 min old with 20 min of work after it
   const t = new Date(lastAt - 20 * 60_000); utimesSync(marker, t, t)
   const out = execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
     input: JSON.stringify({ session_id: "kkkk2222-x", cwd: dir, transcript_path: tr }), encoding: "utf8",
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } })
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli" } })
   assert.match(JSON.parse(out).reason, /Write the handoff NOW/, "the hook measures freshness from the transcript")
 })
 
@@ -212,7 +212,7 @@ test("H1: a budget that cannot be written lets the stop through — measured in 
   writeFileSync(tr, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "go" } }) + "\n")
   const out = execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
     input: JSON.stringify({ session_id: "kkkk3333-x", cwd: dir, transcript_path: tr, last_assistant_message: "Step done." }), encoding: "utf8",
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } })
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli" } })
   assert.equal(out, "", "no block")
   assert.match(readFileSync(join(dir, ".set/handoff/keep-going.log"), "utf8"), /budget state cannot be written/)
 })
@@ -227,4 +227,17 @@ test("H1: keep-going's own nudge is never the last human prompt, even unmarked �
 
 test("H2: the continue nudge says an outward, irreversible or permission step is never covered by earlier words — a consumer review saw it push a session past a mail preview's OK", () => {
   assert.match(decideStop(base).reason, /outward, irreversible or permission step .* is never covered by earlier words/)
+})
+
+test("M3: the kill switch is found from CLAUDE_PROJECT_DIR, not the shell's cwd — a session that cd'd into a subdirectory lost its switch, state and budget (consumer review 2026-11-08)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "kg-m3-"))
+  mkdirSync(join(dir, ".set/handoff"), { recursive: true }); mkdirSync(join(dir, "sub"))
+  writeFileSync(join(dir, ".set/handoff/.no-keepgoing"), "")
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "go" } }) + "\n")
+  const out = execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
+    input: JSON.stringify({ session_id: "kkkk4444-x", cwd: join(dir, "sub"), transcript_path: tr, last_assistant_message: "Step done." }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PROJECT_DIR: dir } })
+  assert.equal(out, "", "the project's .no-keepgoing holds in a subdirectory")
+  assert.ok(!existsSync(join(dir, "sub/.set")), "nothing is written under the subdirectory")
 })

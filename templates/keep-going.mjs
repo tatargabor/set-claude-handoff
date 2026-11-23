@@ -119,7 +119,11 @@ function parseArgs(argv) {
   return o
 }
 
-function handoffDir(ev) { return join(ev.cwd || process.cwd(), ".set", "handoff") }
+// The project, not the shell's cwd: a session that cd's into a subdirectory or a sibling keeps its
+// kill switch, state and budget (consumer review 2026-11-08, M3). CLAUDE_PROJECT_DIR is what the
+// runtime sets for hooks; ev.cwd is only the fallback.
+function projectDir(ev) { return process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd() }
+function handoffDir(ev) { return join(projectDir(ev), ".set", "handoff") }
 
 function context(ev) {
   const dir = handoffDir(ev)
