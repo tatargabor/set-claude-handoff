@@ -57,8 +57,9 @@ it you use the defaults and SAY so.
    - PostToolUse `Write|Edit|MultiEdit|Bash` → `.claude/hooks/handoff-arm.mjs` — the ARMING hook,
      unless the project already has its own. Without one, no session is ever cleared (the gate
      logs `marker: no marker for this session` for ever).
-   - **keep-going (optional, ask the user):** Stop → `keep-going.mjs stop --threshold <T> --max 40`
-     and PostToolUse `*` → `keep-going.mjs post --threshold <T>` (exact JSON: `init` prints it). The
+   - **keep-going (optional, ask the user):** Stop → `keep-going.mjs stop --max 40` and PostToolUse
+     `*` → `keep-going.mjs post` (exact JSON: `init` prints it). There is no `--threshold` here: keep-going
+     reads the gate's default, so an upgrade moves both. A number in settings.json stays behind. The
      session then stops only on a line starting `NEED INPUT:` or `ALL DONE:`, and writes its own
      handoff at the limit. Off: `touch .set/handoff/.no-keepgoing` (or `.no-keepgoing-<session8>`).
      Its decisions are in `.set/handoff/keep-going.log`.

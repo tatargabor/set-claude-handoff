@@ -155,11 +155,13 @@ Next, merge YOURSELF (init never touches these — they are consumer-owned):
    OPTIONAL — keep-going (the session stops only on a line starting NEED INPUT: or ALL DONE:,
    and writes the handoff itself at the limit; off again with: touch .set/handoff/.no-keepgoing):
      "Stop":        [ { "hooks": [ { "type": "command",
-         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" stop --threshold 400000 --max 40", "timeout": 10 } ] } ]
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" stop --max 40", "timeout": 10 } ] } ]
      "PostToolUse": [ { "matcher": "*", "hooks": [ { "type": "command",
-         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" post --threshold 400000", "timeout": 10 } ] } ]
-   Keep --threshold equal to the watcher's (default 400000), and start the watcher with
-   --auto-continue default so the cleared session is re-prompted.
+         "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/keep-going.mjs\\" post", "timeout": 10 } ] } ]
+   No --threshold: keep-going then reads the gate's own default, so a package upgrade moves both.
+   A number written into settings.json stays behind (seen: 500000 after the gate moved to 400000).
+   Pass --threshold to keep-going ONLY with the same --threshold on the watcher. Start the watcher
+   with --auto-continue default so the cleared session is re-prompted.
 
 2. Your statusline (~/.claude/statusline.sh) — paste the fragment from
    templates/statusline-persist.sh so .set/handoff/.context-tokens gets the live token count.

@@ -154,3 +154,12 @@ test("init --auto-clear ships the watcher and its presence check — the 10:03:5
   assert.ok(exists(join(dir, ".claude/hooks/handoff-arm.mjs")), "without an arming hook no session is ever cleared")
   assert.ok(exists(join(dir, ".claude/hooks/keep-going.mjs")))
 })
+
+test("init --auto-clear prints keep-going hooks WITHOUT --threshold — a number pasted into settings.json stayed at 500000 after the gate's default moved to 400000", () => {
+  const dir = mkdtempSync(join(tmpdir(), "init-kg-"))
+  const out = []
+  cmdInit({ cwd: dir, autoClear: true, log: (l) => out.push(l) })
+  const kg = out.join("\n").split("\n").filter((l) => l.includes("keep-going.mjs\\\" "))
+  assert.ok(kg.length >= 2, `keep-going hook lines printed:\n${out.join("\n")}`)
+  for (const l of kg) assert.doesNotMatch(l, /--threshold/, l)
+})
