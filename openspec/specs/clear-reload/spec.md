@@ -52,7 +52,8 @@ WHEN a session is compacted and has no arm marker of its own, the injection SHAL
 chosen by modification time. It SHALL list the candidate handoffs (ID, slug, age) and state that the
 session has no own handoff, should rely on its compact summary, and loads one with `/handoff <ID>` only
 if it is its own. A compact keeps its summary; a newest-by-mtime page in a parallel-session tree is
-usually another thread's. The clear path keeps the announced mtime fallback.
+usually another thread's. The clear path keeps an announced mtime fallback only where it is
+unambiguous (next requirement).
 
 #### Scenario: Unarmed session compacts in a shared tree
 - **WHEN** a session with no `.written-<session8>` marker is compacted while other threads' handoffs exist
@@ -62,6 +63,26 @@ usually another thread's. The clear path keeps the announced mtime fallback.
 #### Scenario: Armed session compacts
 - **WHEN** a session whose marker names its handoff is compacted
 - **THEN** that handoff is reloaded as before
+
+### Requirement: A clear without a marker loads by mtime only when it is no guess
+WHEN a session is cleared and neither its own marker nor the cleared session's marker names a handoff,
+the injection SHALL load a page by modification time ONLY if exactly one page of the cwd's own tree was
+written within the last 2 hours. Otherwise it SHALL list the candidates (ID, slug, age), say why none
+was loaded, and state that a page is loaded with `/handoff <ID>` only if it is the session's own.
+Measured 2026-11-23: "newest wins" reloaded a 35-day-old page 26 times into six unrelated sessions, and
+a 10-day-old foreign page on five manual clears.
+
+#### Scenario: Only an old page
+- **WHEN** a clear finds one handoff, last written 35 days ago, and no marker
+- **THEN** no handoff body is injected; the page is listed with the `/handoff <ID>` instruction
+
+#### Scenario: Several recent pages
+- **WHEN** a clear finds two pages written within the last 2 hours and no marker
+- **THEN** no handoff body is injected; both are listed, and the injection says the newest would be a guess
+
+#### Scenario: One recent page
+- **WHEN** a clear finds exactly one page written within the last 2 hours and no marker
+- **THEN** that page is loaded, with the mtime choice announced
 
 ### Requirement: An empty reload is announced, never silent
 WHEN a `/clear` happens and no loadable handoff exists, the fresh context SHALL be told that no handoff

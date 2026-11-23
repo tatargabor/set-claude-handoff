@@ -25,8 +25,10 @@
  * and every one of their native compacts was handed the tree's newest page as if it were
  * theirs). So on `compact` with no marker of THIS session the injection is a candidate LIST
  * (id, slug, age) and the instruction to rely on the compact summary — the session loads one
- * with `/handoff <ID>` only if it is its own. The clear path keeps its mtime fallback: a
- * cleared context has no summary to rely on.
+ * with `/handoff <ID>` only if it is its own. The clear path keeps an mtime fallback only where it
+ * is no guess, because a cleared context has no summary to rely on: exactly one page of the cwd's
+ * tree written in the last 2 h. Otherwise it lists the candidates too. The audit measured "newest
+ * wins" reloading 10- and 35-day-old foreign pages.
  *
  * Hook input (stdin JSON): session_id, source (clear|compact|resume|startup|fork), cwd.
  * Output: SessionStart additionalContext JSON on stdout. Exit 0 ALWAYS — a hook must never
@@ -92,6 +94,17 @@ const SUMMARY_THREAD =
   "lane is not yours, even when it looks unclaimed."
 
 const MAX_CANDIDATES = 8
+// A clear with no marker loads a page by mtime ONLY when that choice is not a guess: exactly one page
+// in the cwd's own tree was written within this window. Measured failures of the old "newest wins"
+// fallback (consumer audit 2026-11-23): one tree reloaded the same 35-day-old page 26 times into six
+// unrelated sessions; another reloaded a 10-day-old foreign page on five manual clears; a third session
+// adopted a foreign page and wrote to it 7 times. The 2 h is a judgement, not a measurement: a user who
+// writes a handoff and clears does so within minutes, and the measured failures were days old.
+const CLEAR_MTIME_MAX_AGE_MS = 2 * 60 * 60_000
+const CLEAR_LIST_THREAD =
+  "**No handoff is known to be yours.** If one of those listed is your thread, load it with " +
+  "`/handoff <ID>`; otherwise start from the user's next message and re-measure state from the repo. " +
+  "A handoff, goal or status file of another seat is CONTEXT, not your work queue."
 
 /** `<ID>--<slug>.md` → {id, slug}; a name outside the convention keeps its whole stem as the slug. */
 function idSlug(file) {
@@ -184,9 +197,13 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
 
   const homeManual = manual.filter((k) => k.dir === dir)
   // A compact with no marker of THIS session picks nothing: the newest page is a guess, and a compact
-  // has its own summary to fall back on (see the header). Only a clear keeps the mtime fallback.
-  const listOnly = source === "compact" && !marked
-  const chosen = marked ?? (!listOnly && homeManual[0] ? { dir: homeManual[0].dir, file: homeManual[0].f } : null)
+  // has its own summary to fall back on (see the header). A clear picks by mtime only when it is NOT a
+  // guess: exactly one page of the cwd's own tree is recent (CLEAR_MTIME_MAX_AGE_MS). Several recent
+  // pages, or only old ones, give the candidate list instead.
+  const recentHome = homeManual.filter((k) => now - k.m <= CLEAR_MTIME_MAX_AGE_MS)
+  const mtimeOk = source === "clear" && recentHome.length === 1
+  const listOnly = !marked && !mtimeOk && manual.length > 0
+  const chosen = marked ?? (mtimeOk ? { dir: recentHome[0].dir, file: recentHome[0].f } : null)
 
   // Autopilot: record how the handoff was chosen, bind only a marker-chosen reload, and give a
   // bound session the thread's human direction verbatim. `clear` alone writes the reload record —
@@ -223,7 +240,7 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
       ? "chosen by THIS session's own arm marker — the thread you wrote before the clear"
       : prevMarked
         ? "chosen by the arm marker of the session this automatic clear replaced — the thread written before the clear"
-        : "chosen as newest by mtime — in a parallel-session tree, verify it is YOURS"
+        : "chosen by mtime: the only page of this tree written in the last 2 h — in a parallel-session tree, verify it is YOURS"
     const others = manual.filter((k) => !(k.dir === chosen.dir && k.f === chosen.file))
     parts.push([
       `## ⚠ Fresh context — handoff reloaded (${source})`,
@@ -240,24 +257,30 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
       "",
     ].filter((s) => s !== "").join("\n"))
     used += parts[0].length
-  } else if (listOnly && manual.length > 0) {
+  } else if (listOnly) {
     const rows = manual.slice(0, MAX_CANDIDATES).map((k) => {
       const { id, slug } = idSlug(k.f)
       const where = k.dir === dir ? `.set/handoff/${k.f}` : join(k.dir, k.f)
       return `- ${id ? `\`${id}\`` : "(no ID)"} · ${slug} · ${age(now - k.m)} old · \`${where}\``
     })
+    const why = source === "clear"
+      ? (recentHome.length > 1
+        ? `${recentHome.length} pages of this tree were written in the last 2 h, so the newest is a guess; none was loaded.`
+        : "No page of this tree was written in the last 2 h; an old page is another thread's as often as yours. None was loaded.")
+      : "This session has no arm marker, so no handoff here is known to be its own; none was chosen by recency."
     parts.push([
-      "## Context compacted — no handoff loaded",
+      source === "clear" ? "## ⚠ Fresh context — no handoff loaded" : "## Context compacted — no handoff loaded",
       "",
-      `**${NO_OWN_HANDOFF}.**`,
-      "This session has no arm marker, so no handoff here is known to be its own; none was chosen by recency.",
+      source === "clear" ? "**No arm marker names this session's thread.**" : `**${NO_OWN_HANDOFF}.**`,
+      why,
       "",
       `Handoffs in this tree (newest first${manual.length > MAX_CANDIDATES ? `, ${MAX_CANDIDATES} of ${manual.length}` : ""}):`,
       ...rows,
       "",
-      SUMMARY_THREAD,
+      source === "clear" ? CLEAR_LIST_THREAD : SUMMARY_THREAD,
+      source === "clear" ? autopilotNote : "",
       "",
-    ].join("\n"))
+    ].filter((x, i, a) => x !== "" || a[i - 1] !== "").join("\n"))
     used += parts[0].length
   } else if (source === "clear") {
     parts.push([

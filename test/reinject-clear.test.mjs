@@ -55,14 +55,40 @@ test("a clear with no handoff must announce it — an unloaded context must not 
   assert.equal(buildInjection({ dir, source: "compact" }), null)
 })
 
-test("several handoffs → the mtime choice is announced and the others are named — parallel threads", () => {
+test("several RECENT handoffs on a clear → nothing is loaded by mtime, all are listed — the newest of two parallel threads is a coin flip", () => {
   const dir = tmp()
-  handoff(dir, "0911-old--other-thread.md", "# other thread")
-  handoff(dir, "0912-new--this-thread.md", "# this thread")
+  handoff(dir, "0911-0001--other-thread.md", "# other thread")
+  handoff(dir, "0912-0002--this-thread.md", "# this thread")
   const inj = buildInjection({ dir, source: "clear" })
-  assert.match(inj, /0912-new--this-thread\.md/)
-  assert.match(inj, /0911-old--other-thread\.md/, "the not-chosen thread must stay reachable")
-  assert.match(inj, /verify it is YOURS/)
+  assert.match(inj, /no handoff loaded/)
+  assert.match(inj, /2 pages of this tree were written in the last 2 h/)
+  assert.match(inj, /0912-0002--this-thread\.md/)
+  assert.match(inj, /0911-0001--other-thread\.md/, "every candidate stays reachable")
+  assert.doesNotMatch(inj, /# this thread/, "no page body was injected")
+})
+
+test("a clear with only an OLD page lists it instead of loading it — measured 2026-11-23: one tree reloaded the same 35-day-old page 26 times into six unrelated sessions", () => {
+  const dir = tmp()
+  handoff(dir, "1008-490b--old-thread.md", "# a thread from last month")
+  const old = new Date(Date.now() - 35 * 86_400_000)
+  utimesSync(join(dir, "1008-490b--old-thread.md"), old, old)
+  const inj = buildInjection({ dir, source: "clear", sessionId: "fresh555-6666" })
+  assert.match(inj, /no handoff loaded/)
+  assert.match(inj, /1008-490b/)
+  assert.doesNotMatch(inj, /a thread from last month/)
+  assert.match(inj, /\/handoff <ID>/)
+})
+
+test("one recent page among old ones is loaded on a clear — the unambiguous case keeps its fallback", () => {
+  const dir = tmp()
+  handoff(dir, "1001-0aaa--old.md", "# old")
+  const old = new Date(Date.now() - 3 * 86_400_000)
+  utimesSync(join(dir, "1001-0aaa--old.md"), old, old)
+  handoff(dir, "1123-0bbb--just-written.md", "# just written\n")
+  const inj = buildInjection({ dir, source: "clear", sessionId: "fresh777-8888" })
+  assert.match(inj, /# just written/)
+  assert.match(inj, /the only page of this tree written in the last 2 h/)
+  assert.match(inj, /1001-0aaa--old\.md/, "the old page stays reachable")
 })
 
 test("an over-cap handoff must truncate LOUDLY, naming the file — never a silent fragment", () => {
