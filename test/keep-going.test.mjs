@@ -152,3 +152,29 @@ test("keep-going as a hook: prints a block decision on an ordinary stop, nothing
   writeFileSync(join(dir, ".set/handoff/.no-keepgoing"), "")
   assert.equal(run(), "")
 })
+
+test("keep-going at the limit: a handoff 20 min old with 20 min of work after it is NOT 'armed — waiting for the auto-clear' — the gate calls it stale and would never clear it, so keep-going asks for a fresh one (the two definitions drifted: 30-min wall clock vs last act)", () => {
+  assert.equal(decideStop({ ...base, tokens: 410_000, markerAgeMs: 20 * 60_000, markerFresh: false }).block, true, "stale ⇒ ask")
+  assert.equal(decideStop({ ...base, tokens: 410_000, markerAgeMs: 20 * 60_000, markerFresh: true }).block, false, "fresh ⇒ wait for the clear")
+
+  const dir = mkdtempSync(join(tmpdir(), "kg-fresh-"))
+  const hd = join(dir, ".set/handoff"); mkdirSync(hd, { recursive: true })
+  const tr = join(dir, "t.jsonl")
+  const lastAt = Date.now() - 60_000
+  writeFileSync(tr, [
+    { type: "user", uuid: "u1", message: { role: "user", content: "go" } },
+    { type: "assistant", timestamp: new Date(lastAt).toISOString(), message: { content: [{ type: "text", text: "Step 9 done." }], usage: { input_tokens: 0, cache_read_input_tokens: 410_000 } } },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n")
+  const marker = join(hd, ".written-kkkk2222")
+  writeFileSync(marker, "x 1123-cccc--t.md\n")
+  const t = new Date(lastAt - 20 * 60_000); utimesSync(marker, t, t)
+  const out = execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, "stop"], {
+    input: JSON.stringify({ session_id: "kkkk2222-x", cwd: dir, transcript_path: tr }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "cli" } })
+  assert.match(JSON.parse(out).reason, /Write the handoff NOW/, "the hook measures freshness from the transcript")
+})
+
+test("keep-going's default threshold IS the gate's — one constant, so a gate change cannot leave keep-going behind", async () => {
+  const { DEFAULT_THRESHOLD } = await import("../templates/clear-gate.mjs")
+  assert.equal(DEFAULTS.threshold, DEFAULT_THRESHOLD)
+})

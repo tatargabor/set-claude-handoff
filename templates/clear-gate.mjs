@@ -315,6 +315,21 @@ export function warmIdleVerdict({ minutesOpt, floor, tokens, turnIdle, turnReaso
     : `idle ${minutes} min ≥ ${minutesOpt}, ${tokens} ≥ floor ${floor}, turn ended`, { due: true })
 }
 
+/**
+ * Is this session's marker FRESH — was its handoff the last act? One definition, shared by the gate
+ * and keep-going so the two can never disagree: the last assistant record (else the transcript's
+ * mtime) may trail the marker by at most windowSec. Returns {present, fresh, lagSec, markerMtime, lastAt}.
+ */
+export function markerFreshness({ dir, s8, transcriptPath, windowSec = DEFAULT_REQUEST_WINDOW_SEC }) {
+  const markerPath = join(dir, MARKER_PREFIX + s8)
+  const markerMtime = s8 && s8 !== "ismeretlen" && existsSync(markerPath) ? statSync(markerPath).mtimeMs : null
+  const lastAt = lastAssistantAt(transcriptPath)
+  let lastWork = lastAt
+  if (lastWork == null && transcriptPath && existsSync(transcriptPath)) lastWork = statSync(transcriptPath).mtimeMs
+  const lagSec = markerMtime != null && lastWork != null ? (lastWork - markerMtime) / 1000 : null
+  return { present: markerMtime != null, fresh: markerMtime != null && (lagSec == null || lagSec <= windowSec), lagSec, markerMtime, lastAt }
+}
+
 /** The session's ask records, in order: `.handoff-nudged-<s8>`, then `.2`, `.3`. */
 export function nudgeRecords(dir, s8) {
   const names = [NUDGE_PREFIX + s8, ...Array.from({ length: MAX_NUDGES - 1 }, (_, i) => `${NUDGE_PREFIX}${s8}.${i + 2}`)]
@@ -412,12 +427,7 @@ export function evaluate(opts = {}) {
   // Freshness: the handoff must be the session's last act. Last work = the last assistant record's
   // timestamp, else the transcript's mtime; it may trail the marker by at most the request window.
   const windowSec = Number(opts.requestWindowSec ?? DEFAULT_REQUEST_WINDOW_SEC)
-  const lastAt = lastAssistantAt(transcriptPath)
-  const markerMtime = s8 !== "ismeretlen" && existsSync(markerPathEarly) ? statSync(markerPathEarly).mtimeMs : null
-  let lastWork = lastAt
-  if (lastWork == null && transcriptPath && existsSync(transcriptPath)) lastWork = statSync(transcriptPath).mtimeMs
-  const lagSec = markerMtime != null && lastWork != null ? (lastWork - markerMtime) / 1000 : null
-  const markerFresh = markerMtime != null && (lagSec == null || lagSec <= windowSec)
+  const { fresh: markerFresh, lagSec, markerMtime, lastAt } = markerFreshness({ dir, s8, transcriptPath, windowSec })
   const warm = warmIdleVerdict({
     minutesOpt: Number(opts.idleMinutes ?? DEFAULT_IDLE_MINUTES), floor: Number(opts.idleFloor ?? DEFAULT_IDLE_FLOOR),
     tokens: tok.tokens, turnIdle: turn.idle, turnReason: turn.reason, optoutOk: optoutEarly,

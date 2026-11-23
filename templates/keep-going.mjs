@@ -32,10 +32,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { readTokens, session8 } from "./clear-gate.mjs"
+import { readTokens, session8, markerFreshness, DEFAULT_THRESHOLD } from "./clear-gate.mjs"
 
 // threshold: the clear-gate's own default (400k, owner decision 2026-11-23) — keep the two equal.
-export const DEFAULTS = { threshold: 400_000, max: 40, markerFreshMs: 30 * 60_000, handoffNudges: 3, postEveryMs: 10 * 60_000 }
+// threshold: the gate's own constant, imported, so the two cannot drift apart (they did: consumer
+// settings still carried --threshold 500000 after the gate moved to 400k).
+export const DEFAULTS = { threshold: DEFAULT_THRESHOLD, max: 40, markerFreshMs: 30 * 60_000, handoffNudges: 3, postEveryMs: 10 * 60_000 }
 const STOP_MARK = /^[\s>*_`-]*(NEED INPUT|ALL DONE)\s*:/im
 
 /** The last assistant text of the transcript — the fallback when the Stop input lacks it. */
@@ -70,7 +72,7 @@ function readState(path) { try { return JSON.parse(readFileSync(path, "utf8")) }
  * The Stop decision as a pure function of what the hook can see — the tests drive this directly.
  * Returns { block: boolean, reason?: string, why: string, state }.
  */
-export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs, killed, human, state = {}, opts = {} }) {
+export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs, markerFresh, killed, human, state = {}, opts = {} }) {
   const o = { ...DEFAULTS, ...opts }
   // `?? null` on both sides so an empty state and "no human prompt found" compare equal; the
   // stored state carries `human` forward, so a budget with no human prompt still runs out (tested).
@@ -80,7 +82,11 @@ export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs,
   const mark = STOP_MARK.exec(message ?? "")
   if (mark) return { block: false, why: `the message says ${mark[1].toUpperCase()}`, state: st }
   if (tokens != null && tokens >= o.threshold) {
-    if (markerAgeMs != null && markerAgeMs <= o.markerFreshMs) return { block: false, why: `context ${tokens} ≥ ${o.threshold} and the handoff is armed — waiting for the auto-clear`, state: st }
+    // Fresh = the gate's definition (the handoff was the last act) when the caller measured it; the
+    // age rule is only the fallback. A handoff 20 min old with 20 min of work after it is NOT fresh:
+    // the gate would refuse the clear, so the stop must not wait for one.
+    const fresh = markerFresh ?? (markerAgeMs != null && markerAgeMs <= o.markerFreshMs)
+    if (fresh) return { block: false, why: `context ${tokens} ≥ ${o.threshold} and the handoff is armed — waiting for the auto-clear`, state: st }
     if ((st.handoffNudges ?? 0) >= o.handoffNudges) return { block: false, why: `context ${tokens} ≥ ${o.threshold}, asked ${st.handoffNudges}× for a handoff and none is armed — stopping so a human sees it`, state: st }
     st.handoffNudges = (st.handoffNudges ?? 0) + 1
     return {
@@ -121,7 +127,8 @@ function context(ev) {
   try { markerAgeMs = Date.now() - statSync(markerPath).mtimeMs } catch { /* not armed */ }
   const killed = existsSync(join(dir, ".no-keepgoing")) ? ".no-keepgoing"
     : existsSync(join(dir, `.no-keepgoing-${s8}`)) ? `.no-keepgoing-${s8}` : null
-  return { dir, s8, lines, tokens: tok.tokens, markerAgeMs, killed, statePath: join(dir, `.keepgoing-${s8}.json`) }
+  const markerFresh = markerAgeMs == null ? false : markerFreshness({ dir, s8, transcriptPath: ev.transcript_path }).fresh
+  return { dir, s8, lines, tokens: tok.tokens, markerAgeMs, markerFresh, killed, statePath: join(dir, `.keepgoing-${s8}.json`) }
 }
 
 function log(dir, line) {
@@ -150,7 +157,7 @@ async function main(argv) {
     // An early warning inside a long turn: the Stop check only runs at the END of a turn.
     const o = { ...DEFAULTS, ...opts }
     if (c.killed || c.tokens == null || c.tokens < o.threshold) return 0
-    if (c.markerAgeMs != null && c.markerAgeMs <= o.markerFreshMs) return 0
+    if (c.markerFresh ?? (c.markerAgeMs != null && c.markerAgeMs <= o.markerFreshMs)) return 0
     const st = readState(c.statePath)
     if (st.postAt && Date.now() - st.postAt < o.postEveryMs) return 0
     st.postAt = Date.now()
@@ -165,7 +172,7 @@ async function main(argv) {
   const message = ev.last_assistant_message ?? lastAssistantText(c.lines)
   const d = decideStop({
     message, backgroundTasks: Array.isArray(ev.background_tasks) ? ev.background_tasks : [],
-    tokens: c.tokens, markerAgeMs: c.markerAgeMs, killed: c.killed, human: lastHumanPrompt(c.lines),
+    tokens: c.tokens, markerAgeMs: c.markerAgeMs, markerFresh: c.markerFresh, killed: c.killed, human: lastHumanPrompt(c.lines),
     state: readState(c.statePath), opts,
   })
   try { mkdirSync(c.dir, { recursive: true }); writeFileSync(c.statePath, JSON.stringify(d.state)) } catch { /* budget state lost ⇒ it restarts; logged below */ }
