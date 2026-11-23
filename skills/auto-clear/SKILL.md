@@ -35,9 +35,15 @@ Run and report; each answer changes what you do next:
 ```bash
 test -f .claude/hooks/clear-gate.mjs && echo gate-installed || echo gate-missing
 grep -c "clear-gate\|handoff-reinject" .claude/settings.json   # hook wiring (0 = not wired)
+command -v set-claude-handoff                                  # the package binary (plugin wiring)
+ls -l .set/handoff/.watcher-alive 2>/dev/null                  # a watcher's heartbeat (≤ 10 min = live)
 ls .set/handoff/.no-autoclear 2>/dev/null                      # PROJECT switch: present = OFF
 pgrep -af "watch-auto-clear.sh" | grep "$(pwd -P)" || true     # is a watcher armed for THIS tree
 ```
+
+A plugin may wire the hooks instead of `.claude/settings.json`: its `hooks.json` lines call
+`set-claude-handoff hook …` (written by `set-claude-handoff plugin-files`). Then `gate-missing` and a 0
+count are expected, and the binary plus the heartbeat are the evidence; say which wiring you found.
 
 Also read `.claude/handoff.profile.md` — an `## Auto-clear` section there (threshold,
 background-work policy, auto-continue prompt, persistence) is the project's tuning; without

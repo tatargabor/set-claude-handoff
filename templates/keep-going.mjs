@@ -125,6 +125,10 @@ function parseArgs(argv) {
 // kill switch, state and budget (consumer review 2026-11-08, M3). CLAUDE_PROJECT_DIR is what the
 // runtime sets for hooks; ev.cwd is only the fallback.
 function projectDir(ev) { return process.env.CLAUDE_PROJECT_DIR || ev.cwd || process.cwd() }
+export const HEARTBEAT_MAX_MS = 10 * 60_000
+export function heartbeatFresh(dir, now = Date.now()) {
+  try { return now - statSync(join(dir, ".watcher-alive")).mtimeMs <= HEARTBEAT_MAX_MS } catch { return false }
+}
 function handoffDir(ev) { return join(projectDir(ev), ".set", "handoff") }
 
 function context(ev) {
@@ -136,8 +140,9 @@ function context(ev) {
   const markerPath = join(dir, `.written-${s8}`)
   let markerAgeMs = null
   try { markerAgeMs = Date.now() - statSync(markerPath).mtimeMs } catch { /* not armed */ }
-  // the auto-clear half is per project: the watcher init installs beside this hook
-  const autoClear = existsSync(join(projectDir(ev), ".claude", "hooks", "watch-auto-clear.sh"))
+  // Watched: the per-repo watcher file exists, or a watcher run from the package (no copy) wrote its
+  // heartbeat within the last 10 min.
+  const autoClear = existsSync(join(projectDir(ev), ".claude", "hooks", "watch-auto-clear.sh")) || heartbeatFresh(dir)
   const killed = existsSync(join(dir, ".no-keepgoing")) ? ".no-keepgoing"
     : existsSync(join(dir, `.no-keepgoing-${s8}`)) ? `.no-keepgoing-${s8}` : null
   const markerFresh = markerAgeMs == null ? false : markerFreshness({ dir, s8, transcriptPath: ev.transcript_path }).fresh

@@ -129,7 +129,9 @@ PRESENCE="$(dirname "$GATE")/presence.mjs"
 [ -f "$PRESENCE" ] || { echo "presence check not found: $PRESENCE — re-run init --auto-clear (typing without it is how the 10:03:50Z collision happened)" >&2; exit 2; }
 TURN="$(dirname "$GATE")/turn-state.mjs"
 [ -f "$TURN" ] || { echo "turn-state check not found: $TURN — re-run init --auto-clear (typing without it is how the 21:24:39Z queue happened)" >&2; exit 2; }
-AP_DIR="$DIR/.claude/hooks/autopilot"
+# Beside the gate: unchanged for the per-repo copy, and the package's own modules when the package runs
+# the watcher (`set-claude-handoff watch`, no per-repo copy).
+AP_DIR="$(dirname "$GATE")/autopilot"
 LEDGER="$AP_DIR/ledger.mjs"
 DRIFT="$AP_DIR/drift-guard.mjs"
 # `--auto-continue default` selects the package's continue prompt without hand-writing one.
@@ -567,7 +569,20 @@ is_descendant() {
 }
 
 log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off) arm-nudge=$([ "$ARM_NUDGE" = "true" ] && echo "on (ratio ${NUDGE_RATIO:-default})" || echo off) warm-idle=$([ "${IDLE_MINUTES:-48}" = "0" ] || [ "${IDLE_FLOOR:-200000}" = "0" ] && echo off || echo "on (${IDLE_MINUTES:-48} min, floor ${IDLE_FLOOR:-200000})")"
+# Heartbeat, every pass, in every watched tree that has a handoff dir (the main tree always). keep-going
+# reads it to know a watcher acts on its handoff demand when no per-repo watcher file exists. Only the
+# mtime counts; the body names who wrote it.
+heartbeat() {
+  local t
+  mkdir -p "$DIR/.set/handoff" 2>/dev/null
+  while IFS= read -r t; do
+    [ -d "$t/.set/handoff" ] && printf '%s %ss %s\n' "$$" "$INTERVAL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$t/.set/handoff/.watcher-alive" 2>/dev/null
+  done <<< "$WORKTREES"
+  return 0
+}
+
 while :; do
+  heartbeat
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
     sid=$(jq -r '.sessionId // empty' "$rec" 2>/dev/null) || continue

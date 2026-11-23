@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, append
 import { homedir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import { cmdHook, cmdWatch, cmdPluginFiles } from "./plugin.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
@@ -23,6 +24,13 @@ const USAGE = `set-claude-handoff ${VERSION}
                                        --auto-clear also installs the auto-clear hook templates (opt-in)
                                        --autopilot installs the autopilot hooks + /autopilot skill (opt-in)
                                        (both installs ship the /auto-clear on/off switchboard skill)
+  set-claude-handoff hook <arm|reinject|keep-going> [args] [--from-plugin]
+                                       run a hook from this package, no per-repo copy; --from-plugin
+                                       stands down where the project's settings wire its own copy
+  set-claude-handoff watch --dir <tree> [watcher flags]
+                                       run the auto-clear watcher from this package
+  set-claude-handoff plugin-files <plugin-dir> [--keep-going] [--dry-run]
+                                       merge the portable hook lines into <plugin-dir>/hooks/hooks.json
   set-claude-handoff --version
   set-claude-handoff help
 
@@ -54,6 +62,12 @@ function main(argv) {
   switch (cmd) {
     case "init":
       return cmdInit({ global: rest.includes("--global"), autoClear: rest.includes("--auto-clear"), autopilot: rest.includes("--autopilot"), cwd: process.cwd() })
+    case "hook":
+      return cmdHook(PKG_ROOT, rest)
+    case "watch":
+      return cmdWatch(PKG_ROOT, rest)
+    case "plugin-files":
+      return cmdPluginFiles(rest)
     case "--version":
     case "-v":
       console.log(VERSION)

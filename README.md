@@ -125,6 +125,21 @@ external executor (tmux send-keys, the fleet pty owner) reads its verdict and ty
 `specs/auto-clear` and `specs/clear-reload` in `openspec/`, and verify your environment with
 `templates/selftest-clear-reload.sh`.
 
+**No per-repo copy: wiring through a plugin.** A product family can ship the hooks in its own Claude Code
+plugin instead of copying them into every repo. With the package installed (`npm i -g set-claude-handoff`):
+
+```bash
+set-claude-handoff plugin-files <plugin-dir> [--keep-going]   # merges the lines into <plugin-dir>/hooks/hooks.json
+set-claude-handoff watch --dir <tree> --interval 60 --auto-continue default   # the watcher, from the package
+```
+
+The lines carry no machine path: each finds the binary at run time (`command -v`, else `~/.local/bin`) and
+calls `set-claude-handoff hook <arm|reinject|keep-going> --from-plugin`. Where a project's own settings still
+wire a copy of that hook, the plugin's line stands down, so nothing fires twice. A re-run replaces only
+its own lines, and a vendored copy in the same `hooks.json` is reported, not removed. Without the binary,
+the reload line says at session start that the reload is off. The watcher writes `.set/handoff/.watcher-alive`
+every pass; keep-going reads it to know a watcher acts on its handoff demand.
+
 **Auto-continue:** the executor may take `--auto-continue "PROMPT"` — after a successful
 automatic clear it re-prompts the fresh session (default off; the prompt should tell the agent
 to read the full handoff and continue its next-steps section, stopping at decision blocks).
