@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   // A temp dir the WATCHER cannot create its no-dedupe dir in (chmod 555 blocks a non-root writer;
@@ -70,7 +70,9 @@ exit 0
     spawn("bash", ["-c", mutate], { cwd: base, detached: true, stdio: "ignore",
       env: { ...process.env, TMPDIR: base, HD: hd, TDIR: tdir } }).unref()
   }
-  const run = spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
+  // termWatcherOnly: `timeout --foreground` signals the watcher's bash ALONE, not its children —
+  // the shape of a plain `kill <pid>`, which a group-wide TERM (the default) cannot reproduce.
+  const run = spawnSync("timeout", [...(termWatcherOnly ? ["--foreground"] : []), String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
     env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""

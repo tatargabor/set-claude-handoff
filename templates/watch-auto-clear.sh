@@ -171,7 +171,16 @@ mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || { log "warn  no-dedupe: cannot create $
 # The dir must not outlive the watcher: otherwise one dir per lifetime accumulates in the temp
 # dir. The EXIT trap covers a normal end; INT TERM HUP clean up AND exit — a trap replaces the
 # signal's default terminate, so the explicit exit is what still ends the watcher.
-cleanup_no_dedupe() { [ -n "$NO_DEDUPE_DIR" ] && rm -rf "$NO_DEDUPE_DIR" 2>/dev/null; return 0; }
+# A trapped signal is also DEFERRED while bash waits for a foreground child, so the loop's
+# `sleep "$INTERVAL"` (60 s in production) would hold a TERM sent to the watcher alone until it
+# ran out. The loop therefore sleeps in the background and `wait`s, which a trapped signal
+# interrupts at once; the handler kills that sleep too, so nothing of the watcher outlives it.
+SLEEP_PID=""
+cleanup_no_dedupe() {
+  [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null
+  [ -n "$NO_DEDUPE_DIR" ] && rm -rf "$NO_DEDUPE_DIR" 2>/dev/null
+  return 0
+}
 trap cleanup_no_dedupe EXIT
 trap 'cleanup_no_dedupe; exit 0' INT TERM HUP
 
@@ -804,5 +813,6 @@ while :; do
       continue_tmux "$pane" "$pane_pid" "$sid" "$tree"
     fi
   done
-  sleep "$INTERVAL"
+  sleep "$INTERVAL" </dev/null >/dev/null 2>&1 & SLEEP_PID=$!
+  wait "$SLEEP_PID"; SLEEP_PID=""
 done

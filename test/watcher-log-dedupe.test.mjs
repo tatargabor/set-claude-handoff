@@ -77,3 +77,12 @@ test("a no-dedupe dir that cannot be created is announced in the log — a silen
   const r = runWatcher({ tokens: 100_000, seconds: 3, watcherTmpUnwritable: true })
   assert.match(r.log, /warn  no-dedupe: cannot create \S+ — verdict lines repeat per pass/, r.log)
 })
+
+test("a TERM sent to the watcher alone ends it at once, not after the pass's sleep — the INT TERM HUP trap made bash defer the signal until `sleep \"$INTERVAL\"` (60 s in production) ran out", () => {
+  const t0 = Date.now()
+  const r = runWatcher({ tokens: 100_000, seconds: 2, extraArgs: ["--interval", "30"], termWatcherOnly: true })
+  const elapsed = (Date.now() - t0) / 1000
+  assert.ok(elapsed < 10, `the watcher took ${elapsed.toFixed(1)} s to stop after its TERM:\n${r.log}`)
+  const left = readdirSync(r.base).filter((n) => n.startsWith("set-handoff-no-dedupe-"))
+  assert.deepEqual(left, [], `leftover no-dedupe dirs in ${r.base}:\n${r.log}`)
+})
