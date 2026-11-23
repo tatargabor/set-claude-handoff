@@ -33,21 +33,25 @@ const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
  * entry is always the current version — that is the invariant test/versions.test.mjs enforces.
  */
 export function shippedHashesOf(src, { pkgRoot, git = runGit, hash = sha256 } = {}) {
-  const out = git(pkgRoot, ["log", "--follow", "--no-abbrev", "--format=%H", "--raw", "--", src]).toString()
-  const blobs = []
+  // --topo-order keeps parents before children in the newest-first walk, so "first occurrence"
+  // below really is a blob's newest appearance even where --follow crosses renames.
+  const out = git(pkgRoot, ["log", "--follow", "--topo-order", "--no-abbrev", "--format=%H", "--raw", "--", src]).toString()
+  // Dedupe keeps each blob's first occurrence in the NEWEST-first walk — its newest appearance.
+  // Deduping after reversing instead keeps the OLDEST appearance, and that is the measured bug:
+  // with v1 → v2 → v1 the list came out [v1, v2], so the live v1 file read as a local edit, and
+  // --regenerate reproduced the same wrong order. Newest-first + reverse keeps the list oldest
+  // first AND lets each blob's newest position stand — the current content ends up last.
+  const seen = new Set()
+  const newestFirst = []
   for (const line of out.split("\n")) {
     if (!line.startsWith(":")) continue
     const blob = line.slice(1).split(" ")[3]
-    if (blob && !ZERO_BLOB.test(blob)) blobs.push(blob)
+    if (blob && !ZERO_BLOB.test(blob) && !seen.has(blob)) {
+      seen.add(blob)
+      newestFirst.push(blob)
+    }
   }
-  blobs.reverse()
-  const seen = new Set()
-  const hashes = []
-  for (const blob of blobs) {
-    if (seen.has(blob)) continue
-    seen.add(blob)
-    hashes.push(hash(git(pkgRoot, ["cat-file", "blob", blob])))
-  }
+  const hashes = newestFirst.reverse().map((blob) => hash(git(pkgRoot, ["cat-file", "blob", blob])))
   if (!hashes.length) throw new Error(`versions: ${src} has no git history — commit it first, then regenerate`)
   return hashes
 }

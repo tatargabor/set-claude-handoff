@@ -83,6 +83,23 @@ test("shippedHashesOf reads oldest first, deduped, through renames and deletions
   assert.deepEqual(shippedHashesOf("h.mjs", { pkgRoot: repo }), [sha256("hx\n")])
 })
 
+test("shippedHashesOf dedupes by NEWEST appearance — with v1 → v2 → v1 the last entry must be v1, the current content: keeping each blob at its OLDEST position produced [v1, v2], so the live v1 file read as a local edit, and --regenerate reproduced the same wrong order on every run", () => {
+  const repo = mkdtempSync(join(tmpdir(), "versions-dedupe-"))
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" })
+  git("init", "-q")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "t")
+  const write = (name, content) => writeFileSync(join(repo, name), content)
+  const commit = (msg) => {
+    git("add", "-A")
+    git("commit", "-q", "-m", msg)
+  }
+  write("f.mjs", "v1\n"); commit("v1")
+  write("f.mjs", "v2\n"); commit("v2")
+  write("f.mjs", "v1\n"); commit("back to v1 — one shipped version, but its newest appearance is last")
+  assert.deepEqual(shippedHashesOf("f.mjs", { pkgRoot: repo }), [sha256("v2\n"), sha256("v1\n")])
+})
+
 test("every .mjs template the package carries is in the install table — init installs from the table, so a file missing there silently stops shipping at all", () => {
   const templates = ["templates", "templates/hooks", "templates/autopilot"].flatMap((d) =>
     readdirSync(join(PKG_ROOT, d))
