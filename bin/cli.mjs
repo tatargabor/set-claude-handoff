@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, append
 import { homedir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { cmdHook, cmdWatch, cmdPluginFiles, projectWires } from "./plugin.mjs"
+import { cmdHook, cmdWatch, cmdPluginFiles, projectWiringFile } from "./plugin.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
@@ -189,20 +189,17 @@ function installAutoClear({ target, cwd, log }) {
   const stamp = join(cwd, ".set", "handoff", ".reload-wired-at")
   if (existsSync(stamp)) {
     log(`kept      ${rel(cwd, stamp)}  (the wiring stamp — written once, never moved)`)
-  } else if (projectWires(cwd, "reinject")) {
+  } else if (projectWiringFile(cwd, "reinject")) {
     // The stamp's meaning: sessions started after it have the reload hook. Only a settings file
     // that already wires the hook can prove that moment — "now" is wrong both ways: on a tree
     // wired long ago it re-excludes every running session (the very bug the stamp exists to fix),
     // and on a first install it lands BEFORE the hand-merge of the hook into settings, so sessions
     // started in between pass the filter with no hook (the unsafe direction). The wiring file's
     // own mtime is at or after its wiring edit, so it errs late = safe.
-    let wiredAt = 0
-    for (const f of ["settings.json", "settings.local.json"]) {
-      const p = join(cwd, ".claude", f)
-      try {
-        if (readFileSync(p, "utf8").includes("reinject")) { wiredAt = statSync(p).mtimeMs; break }
-      } catch { /* absent */ }
-    }
+    // The mtime of the file that WIRES it, by the same predicate: a loose "mentions reinject" scan
+    // took settings.json's mtime when it carried only a --from-plugin line and the real wiring sat
+    // in settings.local.json — a stamp from the wrong file's edit, possibly before the wiring.
+    const wiredAt = statSync(projectWiringFile(cwd, "reinject")).mtimeMs
     mkdirSync(dirname(stamp), { recursive: true })
     writeFileSync(stamp, new Date(wiredAt).toISOString().replace(/\.\d{3}Z$/, "Z") + "\n")
     log(`created   ${rel(cwd, stamp)}  (the wiring stamp — the watcher's --started-after default)`)

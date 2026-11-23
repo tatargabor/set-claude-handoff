@@ -23,18 +23,28 @@ export const HOOKS = {
  * fire beside a project that wires the package itself: a double reload, a budget spent twice.
  */
 export function projectWires(projectDir, name) {
+  return projectWiringFile(projectDir, name) !== null
+}
+
+/**
+ * WHICH settings file wires the hook (its path), or null — the same predicate as projectWires, so a
+ * caller that needs the file (init's wiring stamp takes its mtime) cannot pick one that merely
+ * mentions the hook, such as a settings.json carrying only a --from-plugin line.
+ */
+export function projectWiringFile(projectDir, name) {
   const h = HOOKS[name]
   const pkgLine = new RegExp(`\\shook\\s+${name.replace("-", "\\-")}(\\s|$)`)
   for (const f of ["settings.json", "settings.local.json"]) {
+    const p = join(projectDir, ".claude", f)
     let text
-    try { text = readFileSync(join(projectDir, ".claude", f), "utf8") } catch { continue }
-    if (text.includes(h.file)) return true
+    try { text = readFileSync(p, "utf8") } catch { continue }
+    if (text.includes(h.file)) return p
     let commands = []
     try { commands = commandsOf(JSON.parse(text)) } catch { continue } // unparsable: the runtime cannot run it either
     // a package line is the project's own only WITHOUT --from-plugin; with it, it is a plugin-style line
-    if (commands.some((c) => c.includes("set-claude-handoff") && pkgLine.test(c) && !c.includes("--from-plugin"))) return true
+    if (commands.some((c) => c.includes("set-claude-handoff") && pkgLine.test(c) && !c.includes("--from-plugin"))) return p
   }
-  return false
+  return null
 }
 
 function commandsOf(node, out = []) {

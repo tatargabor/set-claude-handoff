@@ -185,6 +185,18 @@ test("a wired tree's wiring stamp is the settings file's mtime — at or after t
   assert.equal(stamp, wired.toISOString().replace(/\.\d{3}Z$/, "Z") + "\n", "the stamp is the wiring file's mtime, not init's now")
 })
 
+test("the wiring stamp takes the mtime of the settings file that WIRES the hook, not of one that merely mentions it — a loose 'reinject' scan took settings.json's (a --from-plugin line only, which does not wire the project) over settings.local.json's real wiring", () => {
+  const pluginOnly = JSON.stringify({ hooks: { SessionStart: [ { matcher: "clear|compact", hooks: [ { type: "command", command: "set-claude-handoff hook reinject --from-plugin", timeout: 15 } ] } ] } })
+  const dir = project({ ".claude/settings.json": pluginOnly, ".claude/settings.local.json": WIRED_SETTINGS })
+  const mention = new Date(Date.now() - 200 * 24 * 3600_000); mention.setUTCMilliseconds(0)
+  const wired = new Date(Date.now() - 10 * 24 * 3600_000); wired.setUTCMilliseconds(0)
+  utimesSync(join(dir, ".claude/settings.json"), mention, mention)
+  utimesSync(join(dir, ".claude/settings.local.json"), wired, wired)
+  cmdInit({ cwd: dir, autoClear: true, log: silent })
+  const stamp = readFileSync(join(dir, ".set/handoff/.reload-wired-at"), "utf8")
+  assert.equal(stamp, wired.toISOString().replace(/\.\d{3}Z$/, "Z") + "\n", "the stamp must come from settings.local.json, the file that wires the hook")
+})
+
 test("init --auto-clear stamps the wiring time ONCE — a re-run never moves it, or every session started since the first install would fall behind the watcher's filter (change started-after-self-exclusion)", () => {
   const dir = project({ ".claude/settings.json": WIRED_SETTINGS })
   const wired = new Date(Date.now() - 30 * 24 * 3600_000); wired.setUTCMilliseconds(0)
