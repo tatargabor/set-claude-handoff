@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, startedAtMin = 120, wiredAtMin = null, wiredStamp = null }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, startedAtMin = 120, wiredAtMin = null, wiredStamp = null, excluded = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   const hd = join(proj, ".set/handoff")
@@ -43,6 +43,9 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
     writeFileSync(record, nudgeRecord)
     if (nudgeRecordAgeMin != null) { const t = new Date(Date.now() - nudgeRecordAgeMin * 60_000); utimesSync(record, t, t) }
   }
+  // A pre-existing .excluded-<S8> record: a body string for the stale-record case, "" for the
+  // 0-byte disk-full leftover (tests must say which bug they pre-create).
+  if (excluded != null) writeFileSync(join(hd, `.excluded-${S8}`), excluded)
   if (marker) {
     writeFileSync(join(hd, "1123-aaaa--thread.md"), "# thread\n")
     const m = join(hd, `.written-${S8}`)
@@ -64,12 +67,12 @@ exit 0
     env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
-  const excluded = join(hd, `.excluded-${S8}`)
+  const excludedPath = join(hd, `.excluded-${S8}`)
   return {
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
     log, stderr: run.stderr ?? "",
-    excluded: existsSync(excluded) ? excluded : null,
-    excludedBody: existsSync(excluded) ? readFileSync(excluded, "utf8") : null,
+    excluded: existsSync(excludedPath) ? excludedPath : null,
+    excludedBody: existsSync(excludedPath) ? readFileSync(excludedPath, "utf8") : null,
     record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
     record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }

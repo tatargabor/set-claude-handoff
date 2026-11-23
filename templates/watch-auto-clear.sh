@@ -237,6 +237,21 @@ excluded_record() { # $1 = tree, $2 = sid, $3 = startedAt ms, $4 = effective fil
   fi
 }
 
+# The exclusion record's other half (the resume hole): `claude --resume` keeps the session id but
+# starts a NEW process whose startedAt postdates the stamp, so a resumed session passes the filter
+# while its stale .excluded-<session8> stays. keep-going's post early-returns on the exclusion
+# branch, so the unremoved record would suppress every threshold warning for ever — the session
+# that did the right thing gets less advice than before it resumed. Removing it logs once: the
+# file is gone, so its absence is the once-guard.
+included_cleanup() { # $1 = tree, $2 = sid → rc 0 always
+  local s8 f
+  s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
+  f="$1/.set/handoff/.excluded-$s8"
+  [ -e "$f" ] || return 0
+  rm -f "$f" 2>/dev/null
+  log "included  $2  started after the filter — .excluded-$s8 removed"
+}
+
 # Provenance: logged BEFORE typing (specs: intent-ledger). $1 tree, $2 kind, $3 text, $4 session, $5 pid
 typed() {
   [ -f "$LEDGER" ] || return 0
@@ -672,6 +687,7 @@ while :; do
         continue
       fi
     fi
+    included_cleanup "$tree" "$sid"
     slug=$(printf '%s' "$cwd" | sed 's/\//-/g')
     transcript="$HOME/.claude/projects/$slug/$sid.jsonl"
     gate_args=(--session "$sid" --transcript "$transcript" --dir "$tree/.set/handoff" --json --background-work-blocks "$BG")

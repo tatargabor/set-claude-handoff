@@ -49,6 +49,16 @@ test("AC-3: a resumed session — a new runtime record for the same id, started 
   assert.match(r.log, /^\S+ FIRE .*\/clear/m)
 })
 
+test("a session that PASSES the filter loses its stale .excluded-<session8> — the resume keeps the session id but starts a new process whose startedAt postdates the stamp, and an unremoved record kept keep-going's post on the exclusion branch for ever, so the resumed session never heard the threshold warning again", () => {
+  const r = runWatcher({ tokens: 410_000, startedAtMin: 5, wiredAtMin: 120, seconds: 4,
+    excluded: "2026-11-23T20:15:00Z claude --resume feedface-1111-2222-3333-444455556666\nExcluded by the start filter: started before --started-after.\n" })
+  assert.equal(r.excluded, null, `the stale record is removed:\n${r.log}`)
+  assert.equal((r.log.match(/included  \S+  started after the filter — \.excluded-\S+ removed/gm) ?? []).length, 1,
+    `logged once, not on every pass:\n${r.log}`)
+  assert.deepEqual(r.keys.slice(0, 2), ["-t fake:0.0 -l /handoff", "-t fake:0.0 Enter"],
+    `watched like any session once included:\n${r.log}`)
+})
+
 test("a corrupt wiring stamp refuses to start — a silently OFF filter is how a session that cannot reload gets cleared", () => {
   const r = runWatcher({ tokens: 410_000, wiredStamp: "not a date\n", seconds: 2 })
   assert.deepEqual(r.keys, [], r.log)
