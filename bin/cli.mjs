@@ -8,11 +8,13 @@
  * A skill upgrade that clobbers the project's probes would make upgrading unsafe, so nobody
  * would upgrade.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, realpathSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { cmdHook, cmdWatch, cmdPluginFiles, projectWiringFile } from "./plugin.mjs"
+import { INSTALLED_FILES } from "./installed-files.mjs"
+import { cmdVersions } from "./versions.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
@@ -31,6 +33,15 @@ const USAGE = `set-claude-handoff ${VERSION}
                                        run the auto-clear watcher from this package
   set-claude-handoff plugin-files <plugin-dir> [--keep-going] [--dry-run]
                                        merge the portable hook lines into <plugin-dir>/hooks/hooks.json
+  set-claude-handoff versions --json
+                                       print the shipped-versions manifest: per installed file, the
+                                       sha256 of EVERY version this package ever shipped, oldest first
+                                       (a consumer's doctor tells an unedited copy — safe to overwrite —
+                                       from a local edit by matching a hash in this list)
+  set-claude-handoff versions --regenerate
+                                       rebuild shipped-hashes.json from git history (git checkout only;
+                                       prepack runs it at pack/publish — the file is generated, never
+                                       committed)
   set-claude-handoff --version
   set-claude-handoff help
 
@@ -68,6 +79,8 @@ function main(argv) {
       return cmdWatch(PKG_ROOT, rest)
     case "plugin-files":
       return cmdPluginFiles(rest)
+    case "versions":
+      return cmdVersions(PKG_ROOT, rest)
     case "--version":
     case "-v":
       console.log(VERSION)
@@ -108,22 +121,17 @@ export function warnShadowingGlobal({ home = homedir(), log = console.log } = {}
 
 export function cmdInit({ global = false, autoClear = false, autopilot = false, cwd = process.cwd(), log = console.log, home = homedir() } = {}) {
   const target = global ? join(home, ".claude") : join(cwd, ".claude")
-  const skillDir = join(target, "skills", "handoff")
 
-  mkdirSync(skillDir, { recursive: true })
-  const skillPath = join(skillDir, "SKILL.md")
-  const existed = existsSync(skillPath)
-  writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "handoff", "SKILL.md"), "utf8"))
-  log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
-
-  // The auto-clear SKILL (the on/off switchboard) always installs — it is tiny and must be
-  // invocable from any project; the machinery it arms stays behind --auto-clear.
-  const acSkillDir = join(target, "skills", "auto-clear")
-  mkdirSync(acSkillDir, { recursive: true })
-  const acSkillPath = join(acSkillDir, "SKILL.md")
-  const acExisted = existsSync(acSkillPath)
-  writeFileSync(acSkillPath, readFileSync(join(PKG_ROOT, "skills", "auto-clear", "SKILL.md"), "utf8"))
-  log(`${acExisted ? "updated" : "installed"}  ${rel(cwd, acSkillPath)}`)
+  // The always-installed files come from the shared table (installed-files.mjs): the handoff
+  // skill and the auto-clear SKILL (the on/off switchboard — it is tiny and must be invocable
+  // from any project; the machinery it arms stays behind --auto-clear).
+  for (const e of INSTALLED_FILES.filter((e) => e.when === null)) {
+    const dst = join(target, e.dst)
+    mkdirSync(dirname(dst), { recursive: true })
+    const existed = existsSync(dst)
+    writeFileSync(dst, readFileSync(join(PKG_ROOT, e.src), "utf8"))
+    log(`${existed ? "updated" : "installed"}  ${rel(cwd, dst)}`)
+  }
 
   if (autoClear) installAutoClear({ target, cwd, log })
   if (autopilot) installAutopilot({ target, cwd, log })
@@ -167,16 +175,14 @@ function rel(cwd, p) {
  * edits them could clobber a project's own hooks, and an upgrade nobody dares run is no upgrade.
  */
 function installAutoClear({ target, cwd, log }) {
-  const hooksDir = join(target, "hooks")
-  mkdirSync(hooksDir, { recursive: true })
   // The executor and its presence check travel with the gate: the watcher's presence gate (the
   // measured 10:03:50Z typing collision) only reaches a consumer if init ships the watcher too.
   // turn-state.mjs likewise: the watcher exits at start without it, so an init that forgot it
   // (measured 2026-09-21) upgraded a consumer into a watcher that cannot run.
-  for (const f of ["clear-gate.mjs", join("hooks", "handoff-reinject-clear.mjs"), "watch-auto-clear.sh", "presence.mjs", "turn-state.mjs", "handoff-arm.mjs", "keep-going.mjs"]) {
-    const src = join(PKG_ROOT, "templates", f)
-    const dst = join(hooksDir, f.split("/").pop())
-    writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
+  for (const e of INSTALLED_FILES.filter((e) => e.when === "auto-clear")) {
+    const dst = join(target, e.dst)
+    mkdirSync(dirname(dst), { recursive: true })
+    writeFileSync(dst, readFileSync(join(PKG_ROOT, e.src), "utf8"), { mode: e.dst.endsWith(".sh") ? 0o755 : 0o644 })
     log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
   }
   // The wiring stamp (change started-after-self-exclusion): the watcher's --started-after
@@ -249,19 +255,17 @@ for the live check.`)
  * settings.json and the profile stay consumer-owned: init prints the merge, never performs it.
  */
 function installAutopilot({ target, cwd, log }) {
-  const apSrc = join(PKG_ROOT, "templates", "autopilot")
-  const apDst = join(target, "hooks", "autopilot")
-  mkdirSync(apDst, { recursive: true })
-  for (const f of readdirSync(apSrc).filter((f) => f.endsWith(".mjs")).sort()) {
-    writeFileSync(join(apDst, f), readFileSync(join(apSrc, f), "utf8"))
-    log(`installed ${rel(cwd, join(apDst, f))}  (package-owned — overwritten on re-run)`)
+  // Every hook imports `./ledger.mjs` and friends, so the whole directory is installed
+  // together — a partial install would break every hook at load. The rows come from the shared
+  // table, not a readdir: what init installs and what the manifest lists is one list.
+  for (const e of INSTALLED_FILES.filter((e) => e.when === "autopilot")) {
+    const dst = join(target, e.dst)
+    mkdirSync(dirname(dst), { recursive: true })
+    const existed = existsSync(dst)
+    writeFileSync(dst, readFileSync(join(PKG_ROOT, e.src), "utf8"))
+    if (e.dst.endsWith("SKILL.md")) log(`${existed ? "updated" : "installed"}  ${rel(cwd, dst)}`)
+    else log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
   }
-  const skillDir = join(target, "skills", "autopilot")
-  mkdirSync(skillDir, { recursive: true })
-  const skillPath = join(skillDir, "SKILL.md")
-  const existed = existsSync(skillPath)
-  writeFileSync(skillPath, readFileSync(join(PKG_ROOT, "skills", "autopilot", "SKILL.md"), "utf8"))
-  log(`${existed ? "updated" : "installed"}  ${rel(cwd, skillPath)}`)
   const hook = (file, extra = "") => `{ "type": "command", "command": "node \\"$CLAUDE_PROJECT_DIR/.claude/hooks/autopilot/${file}\\""${extra} }`
   log(`
 Next, merge YOURSELF (init never touches these — they are consumer-owned):

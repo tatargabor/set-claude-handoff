@@ -253,6 +253,29 @@ agent can overrule it, and text the watcher typed can never flip it. The switch 
 Verify a Claude Code upgrade with `templates/selftest-autopilot.sh`: it pins the platform behaviors
 the hooks rely on. Evidence and design: `docs/investigations/2026-09-13-thread-anchor-and-auto-answer.md`.
 
+## Shipped versions
+
+`set-claude-handoff versions --json` prints the shipped-versions manifest: for every file `init`
+installs, the sha256 of **every version this repository ever shipped**, oldest first.
+
+```json
+{ "package": "set-claude-handoff", "version": "0.1.0",
+  "files": { ".claude/hooks/clear-gate.mjs": ["<oldest sha256>", "…", "<current sha256>"] } }
+```
+
+A consumer's doctor hashes its installed copy and matches it against the list: a hit means "an
+unedited copy of ours" (safe to overwrite on upgrade), a miss means "a local edit" (ask before
+overwriting). The last entry of each list is the current version of that file.
+
+The manifest is **generated, never committed**: a template commit needs no regeneration commit
+next to it. Everything that packs the package — `npm publish`, `npm pack`, installing it as a
+git dependency — runs the `prepack` script (`versions --regenerate`), so every published or
+git-installed package carries a fresh `shipped-hashes.json`. A git checkout has no committed
+JSON to read: there `versions --json` computes the manifest live from git history without
+writing anything; a package directory without git reads `shipped-hashes.json`; with neither,
+`versions --json` announces it on stderr and exits 1. `versions --regenerate` still writes the
+file by hand in a checkout.
+
 ## Related
 
 - [set-copilot](https://github.com/tatargabor/set-copilot) — voice dictation + meeting copilot for Claude Code
