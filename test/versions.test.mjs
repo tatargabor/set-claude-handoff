@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, appendFileSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,7 +14,9 @@ import { cmdVersions, shippedFilesFromGit, shippedHashesOf } from "../bin/versio
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const silent = () => {}
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
-const committedManifest = () => JSON.parse(readFileSync(join(PKG_ROOT, "shipped-hashes.json"), "utf8"))
+// shipped-hashes.json is generated, never committed — the manifest this suite asserts against
+// is the one computed live from git history, which is what `versions --json` serves here.
+const liveManifest = () => shippedFilesFromGit({ pkgRoot: PKG_ROOT })
 
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -32,27 +34,22 @@ test("the manifest's keys are exactly the files init --auto-clear --autopilot wr
   // handoff.profile.md is project-owned generated content — detection fills it per project,
   // so it is not a verbatim copy of a package file and has no shipped blob to list.
   const installed = written.filter((p) => p !== ".claude/handoff.profile.md")
-  assert.deepEqual(Object.keys(committedManifest()).sort(), installed)
+  assert.deepEqual(Object.keys(liveManifest()).sort(), installed)
 })
 
-test("the last shipped hash of every key is the file's current content — a manifest regenerated on a stale checkout would misclassify the current version as a local edit", () => {
-  const manifest = committedManifest()
+test("the last shipped hash of every key is the file's HEAD blob — a manifest whose newest entry is not what HEAD ships would misclassify the shipped version as a local edit; HEAD and not the working tree, so an uncommitted edit must not fail the suite", () => {
+  const manifest = liveManifest()
   for (const e of INSTALLED_FILES) {
     const hashes = manifest[manifestKey(e)]
     assert.ok(Array.isArray(hashes) && hashes.length > 0, `${manifestKey(e)} must list at least one shipped version`)
     assert.match(hashes.at(-1), /^[0-9a-f]{64}$/, "every entry is a full sha256 hex digest")
+    const headBlob = execFileSync("git", ["-C", PKG_ROOT, "show", `HEAD:${e.src}`])
     assert.equal(
       hashes.at(-1),
-      sha256(readFileSync(join(PKG_ROOT, e.src))),
-      `${e.src}'s current content must be the newest shipped version`,
+      sha256(headBlob),
+      `${e.src}'s HEAD blob must be the newest shipped version`,
     )
   }
-})
-
-test("shipped-hashes.json is up to date with HEAD — a release that edits a template without regenerating ships a version its own manifest does not list", () => {
-  // This is what forces a release to regenerate: any template change without a re-run of
-  // `versions --regenerate` breaks this compare.
-  assert.deepEqual(shippedFilesFromGit({ pkgRoot: PKG_ROOT }), committedManifest())
 })
 
 test("shippedHashesOf reads oldest first, deduped, through renames and deletions — a generator bug reproduces on BOTH sides of the committed-JSON compare, so that test alone cannot catch it", () => {
@@ -131,18 +128,31 @@ test("versions --regenerate outside a git checkout says so and exits 1 — the p
   assert.ok(!existsSync(join(empty, "shipped-hashes.json")), "no history read, no manifest written")
 })
 
-test("`versions --json` prints the promised shape — {package, version, files}, files equal to the committed JSON", () => {
+test("`versions --json` prints the promised shape — {package, version, files}, files equal to the manifest computed from git history", () => {
   const out = execFileSync(process.execPath, [join(PKG_ROOT, "bin/cli.mjs"), "versions", "--json"], { encoding: "utf8" })
   const m = JSON.parse(out)
   assert.deepEqual(Object.keys(m), ["package", "version", "files"])
   assert.equal(m.package, "set-claude-handoff")
   assert.equal(m.version, JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version)
-  assert.deepEqual(m.files, committedManifest())
+  assert.deepEqual(m.files, liveManifest())
+})
+
+test("versions --json in a git checkout computes the manifest LIVE, ignoring any on-disk shipped-hashes.json — serving the stored JSON would freeze the list at the last regeneration, which is what forced a regeneration commit after every template commit", () => {
+  const file = join(PKG_ROOT, "shipped-hashes.json")
+  writeFileSync(file, "{}\n")
+  try {
+    const out = execFileSync(process.execPath, [join(PKG_ROOT, "bin/cli.mjs"), "versions", "--json"], { encoding: "utf8" })
+    assert.deepEqual(JSON.parse(out).files, liveManifest())
+  } finally {
+    unlinkSync(file)
+  }
 })
 
 test("the doctor view separates an unedited copy from a local edit — the promise the manifest exists for", () => {
   const pkg = mkdtempSync(join(tmpdir(), "versions-doctor-"))
-  cpSync(join(PKG_ROOT, "shipped-hashes.json"), join(pkg, "shipped-hashes.json"))
+  // A package dir without git reads the JSON — generate it here exactly as --regenerate writes
+  // it, so the test never depends on this checkout's own (uncommitted) copy.
+  writeFileSync(join(pkg, "shipped-hashes.json"), JSON.stringify(liveManifest(), null, 2) + "\n")
   cpSync(join(PKG_ROOT, "skills"), join(pkg, "skills"), { recursive: true })
   cpSync(join(PKG_ROOT, "templates"), join(pkg, "templates"), { recursive: true })
 

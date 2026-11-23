@@ -40,7 +40,8 @@ const USAGE = `set-claude-handoff ${VERSION}
                                        from a local edit by matching a hash in this list)
   set-claude-handoff versions --regenerate
                                        rebuild shipped-hashes.json from git history (git checkout only;
-                                       the published package ships the committed JSON)
+                                       prepack runs it at pack/publish — the file is generated, never
+                                       committed)
   set-claude-handoff --version
   set-claude-handoff help
 

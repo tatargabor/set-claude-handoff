@@ -5,3 +5,5 @@ node_modules/
 .set/
 set/.work/
 .env
+# Generated manifest — prepack rebuilds it at pack/publish (bin/versions.mjs); never committed.
+shipped-hashes.json

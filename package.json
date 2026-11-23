@@ -32,7 +32,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "prepack": "node bin/cli.mjs versions --regenerate"
   },
   "engines": {
     "node": ">=18"

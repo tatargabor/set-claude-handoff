@@ -4,10 +4,13 @@
  * copy and looks it up here — a hit means "an unedited copy of ours" (safe to overwrite), a
  * miss means "a local edit" (ask before overwriting).
  *
- * The backing data is the committed shipped-hashes.json at the package root. `--regenerate`
- * rebuilds it from `git log --follow` of each source file (every distinct blob, oldest first,
- * deduped), so it runs only in a git checkout; the published package ships the committed JSON
- * (package.json "files") and never needs git.
+ * shipped-hashes.json is GENERATED, never committed: everything that packs the package —
+ * `npm publish`, `npm pack`, installing it as a git dependency — runs the prepack script
+ * `versions --regenerate`, so every published or git-installed package carries a fresh JSON,
+ * and a template commit never needs a regeneration commit next to it. A git checkout has no
+ * committed JSON to read: there `versions --json` computes the manifest live from git history
+ * without writing; a package directory without git reads shipped-hashes.json; with neither,
+ * the command announces it on stderr and exits 1.
  */
 import { createHash } from "node:crypto"
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
@@ -20,6 +23,16 @@ const ZERO_BLOB = /^0+$/
 
 function runGit(pkgRoot, args) {
   return execFileSync("git", ["-C", pkgRoot, ...args], { maxBuffer: 64 * 1024 * 1024 })
+}
+
+/** Is this package root a git checkout (the only place history can be read)? */
+function inGitCheckout(pkgRoot) {
+  try {
+    runGit(pkgRoot, ["rev-parse", "--is-inside-work-tree"])
+    return true
+  } catch {
+    return false
+  }
 }
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
@@ -74,9 +87,7 @@ export function cmdVersions(pkgRoot, rest, { log = console.log, err = console.er
   const json = rest.includes("--json")
 
   if (regenerate) {
-    try {
-      runGit(pkgRoot, ["rev-parse", "--is-inside-work-tree"])
-    } catch {
+    if (!inGitCheckout(pkgRoot)) {
       err(`versions --regenerate reads git history and needs a git checkout — the published package ships ${MANIFEST_FILE} already`)
       return 1
     }
@@ -87,14 +98,22 @@ export function cmdVersions(pkgRoot, rest, { log = console.log, err = console.er
   }
 
   if (!regenerate || json) {
-    const file = join(pkgRoot, MANIFEST_FILE)
-    // Absence is announced, never silent: an empty stdout would read as "zero shipped
-    // versions", i.e. every installed file a local edit — the one answer a doctor must not guess.
-    if (!existsSync(file)) {
-      err(`versions: ${MANIFEST_FILE} is missing at ${file} — regenerate it in a git checkout: node bin/cli.mjs versions --regenerate`)
-      return 1
+    let files
+    if (json && !regenerate && inGitCheckout(pkgRoot)) {
+      // A git checkout has no committed JSON to serve (shipped-hashes.json is generated, not
+      // committed): compute the manifest live, exactly as --regenerate does, but write nothing —
+      // serving a stored copy would freeze the list at whatever the last regeneration produced.
+      files = shippedFilesFromGit({ pkgRoot })
+    } else {
+      const file = join(pkgRoot, MANIFEST_FILE)
+      // Absence is announced, never silent: an empty stdout would read as "zero shipped
+      // versions", i.e. every installed file a local edit — the one answer a doctor must not guess.
+      if (!existsSync(file)) {
+        err(`versions: ${MANIFEST_FILE} is missing at ${file} — regenerate it in a git checkout: node bin/cli.mjs versions --regenerate`)
+        return 1
+      }
+      files = JSON.parse(readFileSync(file, "utf8"))
     }
-    const files = JSON.parse(readFileSync(file, "utf8"))
     if (json) {
       const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"))
       log(JSON.stringify({ package: pkg.name, version: pkg.version, files }, null, 2))
