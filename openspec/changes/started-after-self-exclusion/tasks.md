@@ -13,6 +13,7 @@
 
 - [x] 3.1 The session learns it is excluded: keep-going's post hook (or the handoff skill's Phase 1) reads `.excluded-<session8>` and says it once [REQ: a-session-excluded-by-the-start-filter-is-told-once]
 - [x] 3.2 `/auto-clear` skill: after starting the watcher, state whether THIS session is excluded and give the resume command [REQ: a-session-excluded-by-the-start-filter-is-told-once]
+  — the resume path itself is unmeasured (task 1.1): the skill's `claude --resume` advice carries a caveat to verify the reload before relying on it
 
 ## 4. Close
 
