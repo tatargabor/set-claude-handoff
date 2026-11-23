@@ -243,6 +243,26 @@ agent can overrule it, and text the watcher typed can never flip it. The switch 
 Verify a Claude Code upgrade with `templates/selftest-autopilot.sh`: it pins the platform behaviors
 the hooks rely on. Evidence and design: `docs/investigations/2026-09-13-thread-anchor-and-auto-answer.md`.
 
+## Shipped versions
+
+`set-claude-handoff versions --json` prints the shipped-versions manifest: for every file `init`
+installs, the sha256 of **every version this repository ever shipped**, oldest first.
+
+```json
+{ "package": "set-claude-handoff", "version": "0.1.0",
+  "files": { ".claude/hooks/clear-gate.mjs": ["<oldest sha256>", "…", "<current sha256>"] } }
+```
+
+A consumer's doctor hashes its installed copy and matches it against the list: a hit means "an
+unedited copy of ours" (safe to overwrite on upgrade), a miss means "a local edit" (ask before
+overwriting). The last entry of each list is the current version of that file.
+
+The backing data is the committed `shipped-hashes.json`, shipped inside the npm package — the
+`versions` command never needs git. Rebuild it from git history with
+`node bin/cli.mjs versions --regenerate` (a git checkout only); without the file, `versions --json`
+says so on stderr and exits 1. The test suite refuses a release whose template changed without a
+regeneration, so a shipped package always lists the versions it actually shipped.
+
 ## Related
 
 - [set-copilot](https://github.com/tatargabor/set-copilot) — voice dictation + meeting copilot for Claude Code

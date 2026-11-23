@@ -14,6 +14,7 @@ import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import { cmdHook, cmdWatch, cmdPluginFiles } from "./plugin.mjs"
 import { INSTALLED_FILES } from "./installed-files.mjs"
+import { cmdVersions } from "./versions.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
@@ -32,6 +33,14 @@ const USAGE = `set-claude-handoff ${VERSION}
                                        run the auto-clear watcher from this package
   set-claude-handoff plugin-files <plugin-dir> [--keep-going] [--dry-run]
                                        merge the portable hook lines into <plugin-dir>/hooks/hooks.json
+  set-claude-handoff versions --json
+                                       print the shipped-versions manifest: per installed file, the
+                                       sha256 of EVERY version this package ever shipped, oldest first
+                                       (a consumer's doctor tells an unedited copy — safe to overwrite —
+                                       from a local edit by matching a hash in this list)
+  set-claude-handoff versions --regenerate
+                                       rebuild shipped-hashes.json from git history (git checkout only;
+                                       the published package ships the committed JSON)
   set-claude-handoff --version
   set-claude-handoff help
 
@@ -69,6 +78,8 @@ function main(argv) {
       return cmdWatch(PKG_ROOT, rest)
     case "plugin-files":
       return cmdPluginFiles(rest)
+    case "versions":
+      return cmdVersions(PKG_ROOT, rest)
     case "--version":
     case "-v":
       console.log(VERSION)

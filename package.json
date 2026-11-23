@@ -27,6 +27,7 @@
     "bin",
     "skills",
     "templates",
+    "shipped-hashes.json",
     "README.md",
     "LICENSE"
   ],
