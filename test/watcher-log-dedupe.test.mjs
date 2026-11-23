@@ -4,6 +4,9 @@ import { readFileSync, readdirSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { runWatcher, SID, WATCHER } from "./helpers/watcher-harness.mjs"
 
+// The unwritable-TMPDIR proof needs the mkdir to actually fail, which chmod cannot do to root.
+const isRoot = typeof process.getuid === "function" && process.getuid() === 0
+
 // The bug these guard, measured 2026-11-23: one consumer tree's auto-clear.log had grown to
 // 47 MB / 236 385 lines, and one session's identical verdict appeared 879× in its last 3000
 // lines — `no <sid> tokens:184211 < 400000 via transcript-fallback (-1s old)`, once per 60 s
@@ -68,4 +71,9 @@ test("the watcher's no-dedupe temp dir is gone when the run is killed — one di
   const r = runWatcher({ tokens: 100_000, seconds: 3 })
   const left = readdirSync(r.base).filter((n) => n.startsWith("set-handoff-no-dedupe-"))
   assert.deepEqual(left, [], `leftover no-dedupe dirs in ${r.base}:\n${r.log}`)
+})
+
+test("a no-dedupe dir that cannot be created is announced in the log — a silently disabled dedupe was silent", { skip: isRoot ? "chmod 555 cannot stop root, so the failure cannot be provoked" : false }, () => {
+  const r = runWatcher({ tokens: 100_000, seconds: 3, watcherTmpUnwritable: true })
+  assert.match(r.log, /warn  no-dedupe: cannot create \S+ — verdict lines repeat per pass/, r.log)
 })

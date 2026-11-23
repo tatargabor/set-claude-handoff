@@ -19,9 +19,13 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
+  // A temp dir the WATCHER cannot create its no-dedupe dir in (chmod 555 blocks a non-root writer;
+  // node's own tmpdir() here is untouched — only the child env points at this).
+  let roTmp = null
+  if (watcherTmpUnwritable) { roTmp = join(base, "ro-tmp"); mkdirSync(roTmp); chmodSync(roTmp, 0o555) }
   const hd = join(proj, ".set/handoff")
   for (const d of [join(home, ".claude/sessions"), hd, bin]) mkdirSync(d, { recursive: true })
   writeFileSync(join(home, ".claude/sessions", `${PID}.json`),
@@ -67,7 +71,7 @@ exit 0
       env: { ...process.env, TMPDIR: base, HD: hd, TDIR: tdir } }).unref()
   }
   spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
-    env: { ...process.env, HOME: home, TMPDIR: base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
+    env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
   return {

@@ -166,7 +166,8 @@ log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 # Per-watcher memory for the "no" dedupe below: one small file per watched session, under a
 # per-watcher temp dir (a string set would need declare -A, which macOS bash 3.2 lacks).
 NO_DEDUPE_DIR="${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/set-handoff-no-dedupe-$$"
-mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || NO_DEDUPE_DIR=""
+# A failed creation silently disabled the dedupe — absence is announced, never silent.
+mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || { log "warn  no-dedupe: cannot create $NO_DEDUPE_DIR — verdict lines repeat per pass"; NO_DEDUPE_DIR=""; }
 # The dir must not outlive the watcher: otherwise one dir per lifetime accumulates in the temp
 # dir. The EXIT trap covers a normal end; INT TERM HUP clean up AND exit — a trap replaces the
 # signal's default terminate, so the explicit exit is what still ends the watcher.
