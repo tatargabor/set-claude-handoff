@@ -32,7 +32,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { readTokens, session8, markerFreshness, DEFAULT_THRESHOLD } from "./clear-gate.mjs"
+import { readTokens, session8, markerFreshness, tailLines, DEFAULT_THRESHOLD } from "./clear-gate.mjs"
 
 // threshold: the clear-gate's own default (400k, owner decision 2026-11-23) — keep the two equal.
 // threshold: the gate's own constant, imported, so the two cannot drift apart (they did: consumer
@@ -116,11 +116,13 @@ function parseArgs(argv) {
   return o
 }
 
+function handoffDir(ev) { return join(ev.cwd || process.cwd(), ".set", "handoff") }
+
 function context(ev) {
-  const cwd = ev.cwd || process.cwd()
-  const dir = join(cwd, ".set", "handoff")
+  const dir = handoffDir(ev)
   const s8 = session8(ev.session_id)
-  const lines = ev.transcript_path && existsSync(ev.transcript_path) ? readFileSync(ev.transcript_path, "utf8").trimEnd().split("\n") : []
+  // the tail only: every PostToolUse runs this, and a whole read of a 300 MB transcript cost 2 s and 1.5 GB
+  const lines = ev.transcript_path ? tailLines(ev.transcript_path) ?? [] : []
   const tok = readTokens({ tokensFiles: [join(dir, `.context-tokens-${s8}`)], transcriptPath: ev.transcript_path })
   const markerPath = join(dir, `.written-${s8}`)
   let markerAgeMs = null
@@ -143,15 +145,16 @@ async function main(argv) {
   let ev
   try { ev = JSON.parse(input) } catch { return 0 } // a hook error must never break the work
   if (!ev?.session_id) return 0
-  const c = context(ev)
   // Headless runs are left alone unless --headless: a script's `claude -p` inside the project must
   // not be pushed through 40 extra turns. Measured 2026-09-21 on 2.1.278: hooks of an interactive
   // session see CLAUDE_CODE_ENTRYPOINT=cli, hooks of a `claude -p` run see sdk-cli. Absent ⇒ run.
+  // Checked BEFORE the transcript is read: a headless run reads nothing.
   const entry = process.env.CLAUDE_CODE_ENTRYPOINT
   if (entry && entry !== "cli" && !opts.headless) {
-    if (mode === "stop") log(c.dir, `allow ${c.s8}  headless run (entrypoint ${entry}) — pass --headless to keep it going too`)
+    if (mode === "stop") log(handoffDir(ev), `allow ${session8(ev.session_id)}  headless run (entrypoint ${entry}) — pass --headless to keep it going too`)
     return 0
   }
+  const c = context(ev)
 
   if (mode === "post") {
     // An early warning inside a long turn: the Stop check only runs at the END of a turn.

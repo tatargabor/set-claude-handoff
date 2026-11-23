@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, utimesSync, truncateSync, appendFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { decideStop, lastHumanPrompt, lastAssistantText, DEFAULTS } from "../templates/keep-going.mjs"
@@ -189,4 +189,18 @@ test("a handoff written under a hand-typed, non-hex ID is announced, not silentl
   assert.match(readFileSync(join(dir, ".set/handoff/auto-clear.log"), "utf8"), /1102-n8gt--plan\.md is not a handoff path/)
   writeFileSync(join(dir, ".set/handoff/0930-geo-research.md"), "# Research notes\n")
   assert.equal(run("0930-geo-research.md"), "", "a parked research note (no HANDOFF header) stays quiet")
+})
+
+test("a transcript over 512 MB is read by its tail — measured in a consumer review 2026-11-08: a whole read cost 2 s and 1.5 GB per PostToolUse at 300 MB, and over 512 MB it cannot become one string, so the hook lost the token count", async () => {
+  const { tokensFromTranscript, lastAssistantAt, transcriptIdle } = await import("../templates/clear-gate.mjs")
+  const dir = mkdtempSync(join(tmpdir(), "kg-big-"))
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, "")
+  truncateSync(tr, 600 * 1024 * 1024) // sparse: no disk, no memory unless someone reads it whole
+  const at = new Date().toISOString()
+  appendFileSync(tr, "\n" + JSON.stringify({ type: "assistant", timestamp: at,
+    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 1, cache_read_input_tokens: 410_000 } } }) + "\n")
+  assert.equal(tokensFromTranscript(tr), 410_001)
+  assert.equal(lastAssistantAt(tr), Date.parse(at))
+  assert.equal(transcriptIdle(tr).idle, true)
 })
