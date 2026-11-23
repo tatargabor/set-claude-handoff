@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, existsSync } from "node:fs"
+import { mkdtempSync, writeFileSync, mkdirSync, utimesSync, existsSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { armMarker, evaluate, readTokens, sessionStartAt } from "../templates/clear-gate.mjs"
@@ -356,4 +356,37 @@ test("background work no longer blocks by default — measured 2026-11-23 on 2.1
   assert.equal(res.eligible, true, JSON.stringify(res.gates))
   // ...and the opt-in still restores the fail-closed block, from the CLI form the watcher uses too.
   assert.equal(evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 500_000, transcriptPath: tr, backgroundWorkBlocks: true }).eligible, false)
+})
+
+test("arm nudge: due once for an unarmed idle session at ≥ 60 % of the threshold, never again after the record — 80 of 141 watched sessions never armed (2026-11-23)", () => {
+  const dir = tmp()
+  const tr = join(dir, "t.jsonl")
+  const at = (tokens) => writeFileSync(tr, JSON.stringify({ type: "assistant",
+    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 0, cache_read_input_tokens: tokens } } }) + "\n")
+  const sid = "eeeeeeee-5555"
+  at(200_000)
+  let res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
+  assert.equal(res.nudge.due, true, res.nudge.reason)
+  assert.equal(res.nudge.at, 192_000)
+  writeFileSync(join(dir, ".handoff-nudged-eeeeeeee"), "recorded\n")
+  res = evaluate({ dir, sessionId: sid, transcriptPath: tr })
+  assert.equal(res.nudge.due, false, "the record ends it for this session")
+  assert.match(res.nudge.reason, /already nudged/)
+})
+
+test("arm nudge: not due below the ratio, mid-turn, opted out, armed, or with ratio 0", () => {
+  const dir = tmp()
+  const tr = join(dir, "t.jsonl")
+  const sid = "ffffffff-6666"
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 150_000 } } }) + "\n")
+  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.due, false, "150k < 192k")
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1" }], usage: { input_tokens: 0, cache_read_input_tokens: 200_000 } } }) + "\n")
+  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /not idle/)
+  writeFileSync(tr, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, cache_read_input_tokens: 200_000 } } }) + "\n")
+  assert.equal(evaluate({ dir, sessionId: sid, transcriptPath: tr, nudgeRatio: 0 }).nudge, null, "ratio 0 turns it off")
+  writeFileSync(join(dir, ".no-autoclear-ffffffff"), "")
+  assert.match(evaluate({ dir, sessionId: sid, transcriptPath: tr }).nudge.reason, /opted out/)
+  const dir2 = tmp(); const tr2 = join(dir2, "t.jsonl"); writeFileSync(tr2, readFileSync(tr))
+  armMarker(dir2, sid, "1123-aaaa--x.md", { passed: true }); writeFileSync(join(dir2, "1123-aaaa--x.md"), "# x\n")
+  assert.match(evaluate({ dir: dir2, sessionId: sid, transcriptPath: tr2 }).nudge.reason, /armed/)
 })

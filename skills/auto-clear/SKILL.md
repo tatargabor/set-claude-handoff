@@ -86,9 +86,21 @@ There is no systemd: keep the watcher in its own tmux session (as above), or use
 for reboot survival. First run: add `--dry-run` and read the log — `dry … ELIGIBLE — would /clear
 pane …` proves the session records and the pane lookup work on that machine.
 
+## Arm nudge: the watcher asks once for the handoff
+
+A session with no handoff marker can never be cleared — and in one consumer tree 80 of 141 watched
+sessions never wrote one (2026-11-23). So when a session is idle, unarmed, not opted out, and at ≥ 60 %
+of the threshold (`--nudge-ratio R` on the watcher), the watcher types `/handoff` into it **once**. The
+record `.set/handoff/.handoff-nudged-<session8>` is created before typing and is never overwritten: no
+session is nudged twice. Same presence gate as a clear; a working turn is waited out. Off:
+`--arm-nudge false`.
+
 ## Background agents: compact, not clear
 
-A `/clear` starts a new session and orphans running background agents; a `/compact` keeps them. With
+Measured 2026-11-23 on 2.1.330: background bash tasks and background subagents SURVIVE a `/clear` and notify
+the fresh session (`docs/investigations/2026-11-23-background-survival-rerun.md` in the package), so
+`--background-work-blocks` defaults to false. The compact path below acts only when the block is switched
+on (`--background-work-blocks true`): a `/compact` keeps the session, a `/clear` starts a new one. With
 `--compact-on-background true` (and optionally `--compact-threshold N`, default 320 000) on the watcher, a session whose
 ONLY refusal is running background work, with its own fresh handoff marker, idle and not opted out, gets `/compact`
 instead; the marker is removed afterwards, so the next compact needs a fresh handoff. A working turn is waited out,

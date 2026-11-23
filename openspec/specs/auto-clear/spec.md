@@ -80,6 +80,20 @@ platform upgrade.
 - **WHEN** a harness-tracked background task is running and no survival measurement exists
 - **THEN** no automatic clear is issued while it runs
 
+### Requirement: An unarmed session is asked once for its handoff
+WHEN a watched session is idle, has no arm marker, is not opted out and its context has reached the
+nudge ratio (default 0.6) of the clear threshold, the executor SHALL type `/handoff` into it once. The
+nudge SHALL be recorded per session (`.handoff-nudged-<session8>`) before anything is typed, and a
+recorded session SHALL never be nudged again. The presence gate holds; a working turn is waited out.
+
+#### Scenario: Unarmed session approaches the limit
+- **WHEN** an idle session without a marker passes 60 % of the threshold
+- **THEN** `/handoff` is typed once and the record is written; later passes type nothing
+
+#### Scenario: Already nudged
+- **WHEN** the record exists for the session
+- **THEN** no nudge is due, whatever its context size
+
 ### Requirement: Fleet `-p` agents rotate instead of clearing
 For an agent run with no interactive TUI (a fleet-managed `claude -p` run), `/clear` SHALL NOT be sent —
 there is no TUI to parse it. Context management SHALL be **process rotation**: when the run's context

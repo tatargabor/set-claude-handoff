@@ -49,6 +49,13 @@
  *                   the next one. Every other gate still holds: own marker, idle, background,
  *                   opt-out (an opt-out beats a request). The verdict's `request` names the file so
  *                   the executor can claim it (rename) before it types, and delete it after.
+ *   Arm nudge   — NOT a gate: the verdict's `nudge` says whether the executor should type `/handoff`
+ *                   ONCE into an idle session that has no marker yet and is at ≥ nudge-ratio ×
+ *                   threshold (default 0.6). Measured 2026-11-23 in one consumer tree: 80 of 141
+ *                   watched sessions never armed — nothing asked them to write the handoff, so the
+ *                   clear could never fire. `.handoff-nudged-<session8>` in the handoff dir records
+ *                   the nudge; once it exists the nudge is never due again for that session. Idle and
+ *                   opt-out hold for it like for a clear. `--nudge-ratio 0` turns it off.
  *   5. optout     — two kill-switch scopes: `.no-autoclear` in the handoff dir disables the
  *                   whole tree (project level); `.no-autoclear-<session8>` disables one
  *                   session. Presence blocks the clear whatever else holds — the user creates
@@ -59,7 +66,7 @@
  *   node clear-gate.mjs [--session <id>] [--threshold N] [--freshness SEC]
  *        [--dir <handoffDir>] [--transcript <path>] [--tokens-file <path>] [--json] [--dry-run]
  *        [--compact-on-background true|false] [--compact-threshold N]
- *        [--request-ttl SEC] [--request-window SEC]
+ *        [--request-ttl SEC] [--request-window SEC] [--nudge-ratio R]
  *   The verdict's `action` is `clear` (all gates hold), `compact` (opt-in: only background work refuses
  *   the clear; the session keeps its agents) or null.
  *   A hook-style JSON on stdin (session_id, transcript_path, cwd) is also accepted.
@@ -88,6 +95,9 @@ const DEFAULT_REQUEST_TTL_SEC = 7200
 // clear would lose it — a peer's `-any` request must never clear a thread that kept working.
 const DEFAULT_REQUEST_WINDOW_SEC = 600
 const MIN_NEXT_LEN = 3
+// Arm nudge: the record that a session was asked for its handoff — once per session, never again.
+export const NUDGE_PREFIX = ".handoff-nudged-"
+const DEFAULT_NUDGE_RATIO = 0.6
 const DEFAULT_FRESHNESS_SEC = 300
 // Compact-on-background (change compact-under-background, measured 2026-10-21): below the harness's
 // own auto-compact point, so the compact happens at an idle moment with a fresh handoff, not mid-turn.
@@ -350,8 +360,25 @@ export function evaluate(opts = {}) {
     const tokOk = tok.tokens != null && tok.tokens >= compactThreshold
     if (tokOk && ok.marker && ok.idle && ok.optout && !ok.background) action = "compact"
   }
+  // Arm nudge — due when this session has no marker yet, is idle, not opted out, never nudged, and
+  // has reached nudge-ratio × threshold: early enough that the handoff exists before the limit.
+  const nudgeRatio = Number(opts.nudgeRatio ?? DEFAULT_NUDGE_RATIO)
+  let nudge = null
+  if (nudgeRatio > 0 && s8 !== "ismeretlen") {
+    const ok = Object.fromEntries(gates.map((g) => [g.name, g.ok]))
+    const at = Math.round(threshold * nudgeRatio)
+    const recorded = existsSync(join(dir, NUDGE_PREFIX + s8))
+    const why = ok.marker ? "armed — no nudge needed"
+      : recorded ? `already nudged (${NUDGE_PREFIX}${s8})`
+      : !ok.optout ? "opted out"
+      : tok.tokens == null ? "context size unknown"
+      : tok.tokens < at ? `${tok.tokens} < ${at}`
+      : !ok.idle ? `not idle: ${idle.reason}`
+      : null
+    nudge = { due: why === null, at, tokens: tok.tokens, reason: why ?? `unarmed at ${tok.tokens} ≥ ${at}, idle, never nudged` }
+  }
   return { eligible, action, sessionId: s8, threshold, request, compactThreshold: opts.compactOnBackground ? compactThreshold : null,
-    gates, at: new Date().toISOString() }
+    nudge, gates, at: new Date().toISOString() }
 }
 
 function main(argv) {
@@ -371,6 +398,7 @@ function main(argv) {
     else if (a === "--compact-threshold") o.compactThreshold = argv[++i]
     else if (a === "--request-ttl") o.requestTtlSec = argv[++i]
     else if (a === "--request-window") o.requestWindowSec = argv[++i]
+    else if (a === "--nudge-ratio") o.nudgeRatio = argv[++i]
     else { console.error(`unknown flag: ${a}`); return 2 }
   }
   if (!o.sessionId || !o.transcriptPath) {
@@ -386,6 +414,7 @@ function main(argv) {
   else {
     for (const g of result.gates) console.log(`${g.ok ? "PASS" : "FAIL"}  ${g.name.padEnd(11)} ${g.detail}`)
     console.log(`${result.eligible ? "ELIGIBLE" : "NOT ELIGIBLE"} — the gate never clears; the executor decides`)
+    if (result.nudge?.due) console.log(`NUDGE due — ${result.nudge.reason}: the executor may type /handoff once`)
     if (result.action === "compact") console.log(`ACTION compact — only background work refuses the clear (≥ ${result.compactThreshold})`)
   }
   return 0

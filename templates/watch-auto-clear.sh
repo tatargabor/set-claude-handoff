@@ -62,6 +62,13 @@
 #                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
 #                 `true` makes the gate refuse unless the armed handoff declares "none" (fail-closed).
 #
+#   --arm-nudge true|false   default true. An idle session with no handoff marker yet, at ≥ nudge-ratio ×
+#                 threshold (--nudge-ratio, default 0.6 in the gate), gets `/handoff` typed ONCE so it
+#                 writes the handoff the clear needs (2026-11-23: 80 of 141 watched sessions in one
+#                 consumer tree never armed). Recorded in .set/handoff/.handoff-nudged-<session8>
+#                 BEFORE typing — never repeated, even after a failed write. Same presence gate;
+#                 a working turn is waited out (no Escape for a nudge).
+#
 #   --compact-on-background true   when ONLY running background work refuses the clear (the gate's
 #                 action `compact`), type /compact instead: the session — and its background agents —
 #                 survive; the session's marker is removed after it, so the next one needs a fresh
@@ -77,6 +84,7 @@
 #   <root>/.set/handoff/auto-clear.log     one line per verdict
 set -u
 
+ARM_NUDGE="true"; NUDGE_RATIO=""
 DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
@@ -95,6 +103,8 @@ while [ $# -gt 0 ]; do
     --autopilot) AUTOPILOT=1; shift;;
     --compact-on-background) COMPACT_BG="$2"; shift 2;;
     --compact-threshold) COMPACT_THRESHOLD="$2"; shift 2;;
+    --arm-nudge) ARM_NUDGE="$2"; shift 2;;
+    --nudge-ratio) NUDGE_RATIO="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -481,6 +491,56 @@ compact_disarm() { # $1 = tree, $2 = sid
 
 # Is pid $1 a descendant of tmux pane pid $2? Walks the parent chain with `ps`, which Linux and
 # macOS both have — /proc does not exist on macOS, so a /proc walk found no pane there at all.
+# The tmux pane hosting pid $1 ("" when none).
+pane_of_pid() {
+  local pp loc
+  while IFS=$'\t' read -r pp loc; do
+    if is_descendant "$1" "$pp"; then printf '%s' "$loc"; return 0; fi
+  done < <(tmux list-panes -a -F '#{pane_pid}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+}
+
+# Arm nudge (--arm-nudge): the gate's `.nudge.due` names an idle, unarmed session at ≥ nudge-ratio ×
+# threshold that was never nudged. The record is created with noclobber (O_EXCL) BEFORE typing, so two
+# passes — or two watchers — can never type it twice; a write that fails types nothing.
+NUDGE_TEXT="/handoff"
+nudge_record() { # $1 = tree, $2 = sid → rc 0 only when THIS call created the record
+  local s8 f
+  s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
+  f="$1/.set/handoff/.handoff-nudged-$s8"
+  [ -e "$f" ] && { log "nudge $2  already recorded in $(basename "$f") — never repeated"; return 1; }
+  if ( set -C; printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NUDGE_TEXT" > "$f" ) 2>/dev/null && [ -s "$f" ]; then
+    return 0
+  fi
+  log "NUDGE FAILED  $2  could not create $f (taken, or disk full?) — not typing"
+  return 1
+}
+nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
+  local pane label pres turn tokens
+  tokens=$(printf '%s' "$4" | jq -r '.nudge.tokens // "?"' 2>/dev/null)
+  pane=$(pane_of_pid "$3")
+  if [ -n "$pane" ]; then
+    pres=$(presence_tmux "$pane"); turn=$(turn_tmux "$pane")
+  else
+    label="$(fleet_label_for_pid "$3")"
+    [ -n "$label" ] || { log "nudge $2  due at $tokens but no tmux pane hosts pid ${3:-?} and no fleet agent holds it — no writer path"; return 0; }
+    pres=$(presence_owner "$label"); turn=$(turn_owner "$label")
+  fi
+  safe_to_type "$pres" || { log "nudge $2  due at $tokens but presence=$pres — a human may be typing; not this pass"; return 0; }
+  [ "$turn" = "idle" ] || { log "nudge $2  due at $tokens but turn=$turn — waits (no Escape for a nudge)"; return 0; }
+  if [ "$DRY" = "1" ]; then log "dry   $2  nudge due at $tokens — would type $NUDGE_TEXT once"; return 0; fi
+  nudge_record "$1" "$2" || return 0
+  typed "$1" nudge "$NUDGE_TEXT" "$2" "$3"
+  if [ -n "$pane" ]; then
+    tmux send-keys -t "$pane" -l "$NUDGE_TEXT"; sleep 0.3; tmux send-keys -t "$pane" Enter
+    log "NUDGE $2  $NUDGE_TEXT → pane $pane at $tokens tokens (unarmed, idle; recorded — never repeated)"
+  elif fleet_write "$label" "$NUDGE_TEXT"; then
+    sleep 0.3; fleet_owner_enter "$label"
+    log "NUDGE $2  $NUDGE_TEXT → fleet agent $label at $tokens tokens (unarmed, idle; recorded — never repeated)"
+  else
+    log "NUDGE FAILED  $2  owner-write to $label — recorded anyway, never retried"
+  fi
+}
+
 is_descendant() {
   local p="$1" want="$2"
   while [ -n "$p" ] && [ "$p" != "0" ] && [ "$p" != "1" ]; do
@@ -490,7 +550,7 @@ is_descendant() {
   return 1
 }
 
-log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off)"
+log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off) arm-nudge=$([ "$ARM_NUDGE" = "true" ] && echo "on (ratio ${NUDGE_RATIO:-default})" || echo off)"
 while :; do
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
@@ -510,6 +570,8 @@ while :; do
     [ -n "$FRESHNESS" ] && gate_args+=(--freshness "$FRESHNESS")
     [ "$COMPACT_BG" = "true" ] && gate_args+=(--compact-on-background true)
     [ -n "$COMPACT_THRESHOLD" ] && gate_args+=(--compact-threshold "$COMPACT_THRESHOLD")
+    if [ "$ARM_NUDGE" = "true" ]; then [ -n "$NUDGE_RATIO" ] && gate_args+=(--nudge-ratio "$NUDGE_RATIO")
+    else gate_args+=(--nudge-ratio 0); fi
     verdict=$(node "$GATE" "${gate_args[@]}" 2>/dev/null) || { log "skip  $sid  gate errored"; continue; }
     eligible=$(printf '%s' "$verdict" | jq -r '.eligible // false')
     failed=$(printf '%s' "$verdict" | jq -r '[.gates[] | select(.ok == false) | .name + ":" + .detail] | join("; ")')
@@ -517,6 +579,9 @@ while :; do
     request_refused_cleanup "$tree" "$verdict" "$sid"
     if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
       log "no    $sid  $failed"
+      if [ "$(printf '%s' "$verdict" | jq -r '.nudge.due // false')" = "true" ]; then
+        nudge_session "$tree" "$sid" "$(jq -r '.pid // empty' "$rec" 2>/dev/null)" "$verdict"
+      fi
       continue
     fi
     CMD="/clear"; [ "$action" = "compact" ] && CMD="/compact"
