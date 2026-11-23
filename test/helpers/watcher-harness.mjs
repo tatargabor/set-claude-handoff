@@ -6,7 +6,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 export const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)))
@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5 }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   const hd = join(proj, ".set/handoff")
@@ -55,8 +55,16 @@ esac
 exit 0
 `)
   chmodSync(join(bin, "tmux"), 0o755)
+  // A detached snippet the test drives a change from MID-run — the fake tmux is not called at all
+  // on a plain "no" pass, so it cannot be the trigger. It sleeps its own lead-in, then runs in
+  // `base` with $HD/$TDIR set and TMPDIR=base (also the watcher's TMPDIR, so snippets can reach
+  // the watcher's own temp state, e.g. its no-dedupe memory, via a set-handoff-no-dedupe-* glob).
+  if (mutate) {
+    spawn("bash", ["-c", mutate], { cwd: base, detached: true, stdio: "ignore",
+      env: { ...process.env, TMPDIR: base, HD: hd, TDIR: tdir } }).unref()
+  }
   spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
-    env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
+    env: { ...process.env, HOME: home, TMPDIR: base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
   return {

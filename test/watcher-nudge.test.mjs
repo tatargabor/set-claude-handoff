@@ -8,8 +8,10 @@ test("an unarmed idle session AT the threshold gets /handoff typed exactly ONCE 
   assert.deepEqual(r.keys, ["-t fake:0.0 -l /handoff", "-t fake:0.0 Enter"], `keys typed: ${JSON.stringify(r.keys)}\n${r.log}`)
   assert.ok(existsSync(r.record), "the nudge is recorded")
   assert.equal((r.log.match(/^\S+ NUDGE /gm) ?? []).length, 1, r.log)
-  const after = r.log.slice(r.log.search(/^\S+ NUDGE /m))
-  assert.ok((after.match(/^\S+ no {4}/gm) ?? []).length >= 2, `later passes ran and typed nothing:\n${r.log}`)
+  // The later passes still run but stay silent now: an unchanged verdict is deduped to shape
+  // changes + a 30-min heartbeat (measured 2026-11-23: it repeated 879× in a 47 MB consumer
+  // log). That nothing is ever re-typed is pinned by the keys assertion above.
+  assert.match(r.log, /^\S+ no {4}/m, `the asking pass logged its verdict:\n${r.log}`)
 })
 
 test("the arm nudge stays quiet below the ratio, for an armed session, and with --arm-nudge false", () => {

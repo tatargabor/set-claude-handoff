@@ -9,7 +9,9 @@
 # types, and it types only on an eligible verdict.
 #
 # Safety properties (kept even when armed):
-#   - every gate verdict is logged, pass or fail — absence is announced, never silent;
+#   - every gate verdict is logged, pass or fail — absence is announced, never silent; the
+#     repeated "no" verdict is deduped to shape changes plus a 30-min heartbeat (measured
+#     2026-11-23: one consumer log grew to 47 MB, one session's verdict 879× in 3000 lines);
 #   - --dry-run evaluates and logs without ever sending keys;
 #   - --started-after drops sessions started before a moment (e.g. before the clear-reload
 #     hook was wired into settings — clearing a session that cannot reload is the one really
@@ -153,6 +155,41 @@ if [ -n "$AFTER" ]; then
 fi
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
+
+# Per-watcher memory for the "no" dedupe below: one small file per watched session, under a
+# per-watcher temp dir (a string set would need declare -A, which macOS bash 3.2 lacks).
+NO_DEDUPE_DIR="${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/set-handoff-no-dedupe-$$"
+mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || NO_DEDUPE_DIR=""
+
+# The verdict's SHAPE: $failed with every run of digits replaced by N — so a moving token count
+# or freshness age (the measured churn: "tokens:184211 < 400000 … (-1s old)") is not a change.
+# The second expression folds N.N into N: the gate prints decimal ages ("idle 55.1 min ≥ 54"),
+# and a ticking tenth of a minute is the same moving number, not a change. \{1,\}, not \+ — BSD sed.
+verdict_shape() { printf '%s' "$1" | sed -e 's/[0-9][0-9]*/N/g' -e 's/\(N\)\(\.N\)\{1,\}/\1/g'; }
+
+# The per-pass "no" line is written only when THIS session's shape changed, or NO_HEARTBEAT_S
+# passed since its last written line (a heartbeat, so a tail still shows the session is watched).
+# Every other line (FIRE, NUDGE, request, warm-idle, skip) is never deduped. rc 0 = write it.
+NO_HEARTBEAT_S=1800
+no_log_due() { # $1 = sid, $2 = shape
+  local f now last seen
+  [ -n "$NO_DEDUPE_DIR" ] || return 0
+  f="$NO_DEDUPE_DIR/$(printf '%s' "$1" | tr -cd 'a-zA-Z0-9')"
+  [ -n "$f" ] || return 0
+  now=$(date +%s)
+  last=""; seen=""
+  if [ -f "$f" ]; then
+    read -r last seen < "$f" 2>/dev/null
+    case "$last" in ''|*[!0-9]*) last="" ;; esac
+    if [ -n "$last" ] && [ "$seen" = "$2" ] && [ $((now - last)) -lt "$NO_HEARTBEAT_S" ]; then
+      return 1
+    fi
+  fi
+  if printf '%s %s\n' "$now" "$2" > "$f" 2>/dev/null && [ -s "$f" ]; then return 0; fi
+  # A failed memory write degrades to the old behavior (repeat per pass) — announced, not silent.
+  log "warn  no-dedupe: cannot write $f — the verdict line repeats until this works"
+  return 0
+}
 
 if ! command -v tmux >/dev/null; then
   if python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
@@ -612,7 +649,7 @@ while :; do
     request_refused_cleanup "$tree" "$verdict" "$sid"
     trigger=$(printf '%s' "$verdict" | jq -r '.trigger // empty')
     if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
-      log "no    $sid  $failed"
+      no_log_due "$sid" "$(verdict_shape "$failed")" && log "no    $sid  $failed"
       if [ "$(printf '%s' "$verdict" | jq -r '.idle.late // false')" = "true" ] && [ "${WARM_MISSED#* $sid }" = "$WARM_MISSED" ]; then
         WARM_MISSED="$WARM_MISSED$sid "
         log "warm-idle missed  $sid  $(printf '%s' "$verdict" | jq -r '.idle.reason')"

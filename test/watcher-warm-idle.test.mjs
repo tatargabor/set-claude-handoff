@@ -29,7 +29,9 @@ test("AC-4 watcher: unarmed and idle 55 min — nothing typed, and 'warm-idle mi
   const r = runWatcher({ tokens: 250_000, idleMin: 55, seconds: 4 })
   assert.deepEqual(r.keys, [], r.log)
   assert.equal((r.log.match(/^\S+ warm-idle missed /gm) ?? []).length, 1, r.log)
-  assert.ok((r.log.match(/^\S+ no {4}/gm) ?? []).length >= 2, `several passes ran:\n${r.log}`)
+  // Several passes ran over the 4 s — but the unchanged verdict logs once now (dedupe: shape +
+  // 30-min heartbeat, measured 2026-11-23), so one "no" line is the pass evidence there is.
+  assert.equal((r.log.match(/^\S+ no {4}/gm) ?? []).length, 1, `repeated verdict:\n${r.log}`)
 })
 
 test("a spinner on the pane: the warm-idle clear waits and never presses Escape (the Escape is for a turn run past the size limit, not for idle)", () => {
