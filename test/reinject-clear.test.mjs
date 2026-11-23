@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, existsSync, utimesSync, mkdirSync } from "n
 import { tmpdir } from "node:os"
 import { join, basename } from "node:path"
 import { execFileSync } from "node:child_process"
-import { buildInjection, sameEventDoubleFire, previousSessionOf } from "../templates/hooks/handoff-reinject-clear.mjs"
+import { buildInjection, sameEventDoubleFire, previousSessionOf, NO_OWN_HANDOFF } from "../templates/hooks/handoff-reinject-clear.mjs"
 
 const tmp = () => mkdtempSync(join(tmpdir(), "reinject-"))
 
@@ -29,7 +29,7 @@ test("a second compact in the same session must inject again — the measured on
   utimesSync(dedup, twoHoursAgo, twoHoursAgo)
   assert.equal(sameEventDoubleFire(dedup), false, "past the window the guard must not suppress")
   const inj = buildInjection({ dir, source: "compact" })
-  assert.match(inj, /# thread/)
+  assert.match(inj, /0912-aaaa/, "a later compact injects again (here: the candidate list — no own marker)")
 })
 
 test("a double-fire of the SAME event must not inject twice — the guard still works inside its window", () => {
@@ -78,7 +78,8 @@ test("the machine page joins the injection, smaller frame — numbers, not inten
   handoff(dir, "0912-aaaa--thread.md", "# thread")
   writeFileSync(join(dir, ".latest"), "0912-auto-abcd--allapot.md\n")
   handoff(dir, "0912-auto-abcd--allapot.md", "# AUTOMATIKUS HANDOFF\nbranch: main")
-  const inj = buildInjection({ dir, source: "compact" })
+  armMarker(dir, "abcd1234", "0912-aaaa--thread.md")
+  const inj = buildInjection({ dir, source: "compact", sessionId: "abcd1234" })
   assert.match(inj, /# thread/)
   assert.match(inj, /Machine state page/)
   assert.match(inj, /branch: main/)
@@ -193,4 +194,37 @@ test("every reload states that the thread is the work and a goal file is context
   assert.match(buildInjection({ dir, source: "compact", sessionId: "fresh222" }), /not your work queue/)
   assert.match(buildInjection({ dir: tmp(), source: "clear", sessionId: "x" }), /not your work queue/,
     "the nothing-to-load path needs it too — that context is the likeliest to grab another lane")
+})
+
+test("a compact with no own marker must not load the newest handoff by mtime — measured 2026-11-23: 80 of 141 watched sessions never armed, and their native compacts were handed another thread's page", () => {
+  const dir = tmp()
+  handoff(dir, "1122-aaaa--my-thread.md", "# my thread — never armed\n")
+  handoff(dir, "1123-bbbb--other-seat.md", "# ANOTHER seat's thread body\n")
+  const older = new Date(Date.now() - 3 * 3600_000)
+  utimesSync(join(dir, "1122-aaaa--my-thread.md"), older, older) // the other seat's page is the newest
+  const inj = buildInjection({ dir, source: "compact", sessionId: "unarmed1-2222" })
+  assert.doesNotMatch(inj, /ANOTHER seat's thread body/, "no body is loaded on a guess")
+  assert.doesNotMatch(inj, /\*\*Handoff:/, "nothing is presented as THE handoff")
+  assert.ok(inj.includes(NO_OWN_HANDOFF), "the instruction is stated verbatim")
+  assert.match(inj, /`1123-bbbb` · other-seat · \d+ min old/, "candidates carry id, slug and age")
+  assert.match(inj, /`1122-aaaa` · my-thread · 3 h old/)
+  assert.match(inj, /not your work queue/, "the lane guard holds here too")
+})
+
+test("a compact WITH its own marker still loads that handoff — the list replaces only the mtime guess", () => {
+  const dir = tmp()
+  handoff(dir, "1122-aaaa--my-thread.md", "# my thread body\n")
+  handoff(dir, "1123-bbbb--other-seat.md", "# other\n")
+  armMarker(dir, "armed111-2222", "1122-aaaa--my-thread.md")
+  const inj = buildInjection({ dir, source: "compact", sessionId: "armed111-2222" })
+  assert.match(inj, /# my thread body/)
+  assert.doesNotMatch(inj, new RegExp(NO_OWN_HANDOFF.slice(0, 30)))
+})
+
+test("the clear path keeps its mtime fallback — a cleared context has no summary to rely on", () => {
+  const dir = tmp()
+  handoff(dir, "1123-bbbb--only.md", "# the only page\n")
+  const inj = buildInjection({ dir, source: "clear", sessionId: "fresh333-4444" })
+  assert.match(inj, /# the only page/)
+  assert.match(inj, /verify it is YOURS/)
 })

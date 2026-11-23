@@ -47,6 +47,22 @@ belong to another thread.
 - **WHEN** the newest-by-mtime handoff is loaded while another thread's handoff also exists
 - **THEN** the injection names the loaded file, states the mtime heuristic, and lists the other handoff
 
+### Requirement: A compact without an own marker lists, never guesses
+WHEN a session is compacted and has no arm marker of its own, the injection SHALL NOT load any handoff
+chosen by modification time. It SHALL list the candidate handoffs (ID, slug, age) and state that the
+session has no own handoff, should rely on its compact summary, and loads one with `/handoff <ID>` only
+if it is its own. A compact keeps its summary; a newest-by-mtime page in a parallel-session tree is
+usually another thread's. The clear path keeps the announced mtime fallback.
+
+#### Scenario: Unarmed session compacts in a shared tree
+- **WHEN** a session with no `.written-<session8>` marker is compacted while other threads' handoffs exist
+- **THEN** no handoff body is injected, the candidates are listed with ID, slug and age, and the
+  instruction to rely on the compact summary is stated
+
+#### Scenario: Armed session compacts
+- **WHEN** a session whose marker names its handoff is compacted
+- **THEN** that handoff is reloaded as before
+
 ### Requirement: An empty reload is announced, never silent
 WHEN a `/clear` happens and no loadable handoff exists, the fresh context SHALL be told that no handoff
 was found — a cleared context with nothing to load is the most dangerous case and must not look like a

@@ -118,7 +118,8 @@ verifies the log before calling it armed. Two kill-switch scopes, both plain fil
 fix for a measured collision where `/clear` landed inside a half-typed line), and two hook templates: **`clear-gate`** — decides whether a session may be
 cleared automatically (context ≥ threshold, this session's own handoff marker, idle, no pending prompt,
 background-work policy), and **`handoff-reinject-clear`** — a `SessionStart` hook (`clear` | `compact`)
-that reloads the latest handoff into the fresh context as pointer + preview. The gate never clears; an
+that reloads the latest handoff into the fresh context as pointer + preview (on a compact, only the session's
+own armed handoff — an unarmed session gets the candidate list instead of a guess). The gate never clears; an
 external executor (tmux send-keys, the fleet pty owner) reads its verdict and types `/clear` — every
 `/clear` then reloads, manual or automatic. Auto-compact stays untouched as the backstop. See
 `specs/auto-clear` and `specs/clear-reload` in `openspec/`, and verify your environment with

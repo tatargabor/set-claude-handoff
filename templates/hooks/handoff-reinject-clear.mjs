@@ -19,6 +19,15 @@
  * may be another thread's); truncation is loud and names the file; a `/clear` with nothing to
  * load says so — an unloaded context must never look loaded from the outside.
  *
+ * A COMPACT WITHOUT AN OWN MARKER LOADS NOTHING BY MTIME. A compact keeps the session and its
+ * summary; the newest handoff in the tree is, in a parallel-session tree, usually another
+ * thread's (measured 2026-11-23: 80 of 141 watched sessions in one consumer tree never armed,
+ * and every one of their native compacts was handed the tree's newest page as if it were
+ * theirs). So on `compact` with no marker of THIS session the injection is a candidate LIST
+ * (id, slug, age) and the instruction to rely on the compact summary — the session loads one
+ * with `/handoff <ID>` only if it is its own. The clear path keeps its mtime fallback: a
+ * cleared context has no summary to rely on.
+ *
  * Hook input (stdin JSON): session_id, source (clear|compact|resume|startup|fork), cwd.
  * Output: SessionStart additionalContext JSON on stdout. Exit 0 ALWAYS — a hook must never
  * break the session's start; failure is announced in-chat or silent, never fatal.
@@ -67,6 +76,35 @@ const OWN_THREAD =
   "priority or status file injected beside it is CONTEXT, not your work queue: an item assigned " +
   "to another seat or lane is not yours, even when it looks unclaimed. If this thread is blocked, " +
   "say so — do not take over another lane."
+
+/** The compact-without-own-marker rule, verbatim — the regression test matches this sentence. */
+export const NO_OWN_HANDOFF =
+  "no own handoff for this session — rely on the compact summary; load one with /handoff <ID> only if it is yours"
+
+/**
+ * The lane guard for a context that loaded NO handoff: the work is the compact summary's thread,
+ * and a listed handoff or a project goal file is context — the same measured lane takeover as
+ * OWN_THREAD, worded for a session that has no handoff to call its own.
+ */
+const SUMMARY_THREAD =
+  "**Your work is the thread in your compact summary.** The handoffs listed here and any project-wide " +
+  "goal, priority or status file are CONTEXT, not your work queue: an item assigned to another seat or " +
+  "lane is not yours, even when it looks unclaimed."
+
+const MAX_CANDIDATES = 8
+
+/** `<ID>--<slug>.md` → {id, slug}; a name outside the convention keeps its whole stem as the slug. */
+function idSlug(file) {
+  const m = /^(\d{4}-[0-9a-f]{4})--(.+)\.md$/.exec(file)
+  return m ? { id: m[1], slug: m[2] } : { id: null, slug: file.replace(/\.md$/, "") }
+}
+
+function age(ms) {
+  const min = Math.max(0, Math.round(ms / 60_000))
+  if (min < 60) return `${min} min`
+  if (min < 48 * 60) return `${Math.round(min / 60)} h`
+  return `${Math.round(min / 1440)} d`
+}
 
 function readEvent() {
   try { return JSON.parse(readFileSync(0, "utf8")) } catch { return {} }
@@ -145,7 +183,10 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
   ).sort((a, b) => b.m - a.m)
 
   const homeManual = manual.filter((k) => k.dir === dir)
-  const chosen = marked ?? (homeManual[0] ? { dir: homeManual[0].dir, file: homeManual[0].f } : null)
+  // A compact with no marker of THIS session picks nothing: the newest page is a guess, and a compact
+  // has its own summary to fall back on (see the header). Only a clear keeps the mtime fallback.
+  const listOnly = source === "compact" && !marked
+  const chosen = marked ?? (!listOnly && homeManual[0] ? { dir: homeManual[0].dir, file: homeManual[0].f } : null)
 
   // Autopilot: record how the handoff was chosen, bind only a marker-chosen reload, and give a
   // bound session the thread's human direction verbatim. `clear` alone writes the reload record —
@@ -198,6 +239,25 @@ export function buildInjection({ dir, source, now = Date.now(), sessionId = "", 
         : cut(body, Math.min(MAX_MANUAL - charter.length, MAX_TOTAL - used - 400 - charter.length), p),
       "",
     ].filter((s) => s !== "").join("\n"))
+    used += parts[0].length
+  } else if (listOnly && manual.length > 0) {
+    const rows = manual.slice(0, MAX_CANDIDATES).map((k) => {
+      const { id, slug } = idSlug(k.f)
+      const where = k.dir === dir ? `.set/handoff/${k.f}` : join(k.dir, k.f)
+      return `- ${id ? `\`${id}\`` : "(no ID)"} · ${slug} · ${age(now - k.m)} old · \`${where}\``
+    })
+    parts.push([
+      "## Context compacted — no handoff loaded",
+      "",
+      `**${NO_OWN_HANDOFF}.**`,
+      "This session has no arm marker, so no handoff here is known to be its own; none was chosen by recency.",
+      "",
+      `Handoffs in this tree (newest first${manual.length > MAX_CANDIDATES ? `, ${MAX_CANDIDATES} of ${manual.length}` : ""}):`,
+      ...rows,
+      "",
+      SUMMARY_THREAD,
+      "",
+    ].join("\n"))
     used += parts[0].length
   } else if (source === "clear") {
     parts.push([
