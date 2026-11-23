@@ -16,12 +16,31 @@ export const HOOKS = {
   "keep-going": { file: "keep-going.mjs", template: "templates/keep-going.mjs" },
 }
 
-/** Does the project's own settings wire this hook's file? Settings decide, not the file's presence. */
-export function projectWires(projectDir, file) {
+/**
+ * Does the project's own settings wire this hook? Settings decide, not the file's presence. Two shapes
+ * count: a copy (`…/handoff-reinject-clear.mjs`) and the package line written into settings
+ * (`set-claude-handoff hook reinject`, without --from-plugin). Missing the second would make a plugin
+ * fire beside a project that wires the package itself: a double reload, a budget spent twice.
+ */
+export function projectWires(projectDir, name) {
+  const h = HOOKS[name]
+  const pkgLine = new RegExp(`\\shook\\s+${name.replace("-", "\\-")}(\\s|$)`)
   for (const f of ["settings.json", "settings.local.json"]) {
-    try { if (readFileSync(join(projectDir, ".claude", f), "utf8").includes(file)) return true } catch { /* absent */ }
+    let text
+    try { text = readFileSync(join(projectDir, ".claude", f), "utf8") } catch { continue }
+    if (text.includes(h.file)) return true
+    let commands = []
+    try { commands = commandsOf(JSON.parse(text)) } catch { continue } // unparsable: the runtime cannot run it either
+    // a package line is the project's own only WITHOUT --from-plugin; with it, it is a plugin-style line
+    if (commands.some((c) => c.includes("set-claude-handoff") && pkgLine.test(c) && !c.includes("--from-plugin"))) return true
   }
   return false
+}
+
+function commandsOf(node, out = []) {
+  if (Array.isArray(node)) for (const n of node) commandsOf(n, out)
+  else if (node && typeof node === "object") for (const [k, v] of Object.entries(node)) k === "command" && typeof v === "string" ? out.push(v) : commandsOf(v, out)
+  return out
 }
 
 export function cmdHook(pkgRoot, rest, { env = process.env, cwd = process.cwd() } = {}) {
@@ -33,7 +52,7 @@ export function cmdHook(pkgRoot, rest, { env = process.env, cwd = process.cwd() 
   }
   const fromPlugin = args.includes("--from-plugin")
   const pass = args.filter((a) => a !== "--from-plugin")
-  if (fromPlugin && projectWires(env.CLAUDE_PROJECT_DIR || cwd, h.file)) return 0
+  if (fromPlugin && projectWires(env.CLAUDE_PROJECT_DIR || cwd, name)) return 0
   const r = spawnSync(process.execPath, [join(pkgRoot, h.template), ...pass], { stdio: "inherit", env })
   return r.status ?? 0
 }

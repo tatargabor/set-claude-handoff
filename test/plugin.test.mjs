@@ -141,3 +141,17 @@ test("`watch` runs the package's watcher with the package's gate — a unit need
 test("the pure stop decision is unchanged by the heartbeat: autoClear is still the caller's input", () => {
   assert.match(decideStop({ message: "x", tokens: 410_000, human: "h", autoClear: true }).reason, /Write the handoff NOW/)
 })
+
+test("a project that wires the PACKAGE line in its own settings makes the plugin stand down too — set-core may write `set-claude-handoff hook reinject` into settings (2026-11-23), and a file-name check missed it: a double reload", async () => {
+  const { projectWires } = await import("../bin/plugin.mjs")
+  const m = machine()
+  const put = (command) => writeFileSync(join(m.proj, ".claude/settings.json"), JSON.stringify({ hooks: { SessionStart: [{ matcher: "clear|compact", hooks: [{ type: "command", command }] }] } }))
+  put('H="$(command -v set-claude-handoff)"; "$H" hook reinject')
+  assert.equal(projectWires(m.proj, "reinject"), true)
+  assert.equal(projectWires(m.proj, "arm"), false, "only the hook it names")
+  put(line("reinject"))
+  assert.equal(projectWires(m.proj, "reinject"), false, "a plugin-style line (--from-plugin) is not the project's own copy")
+  writeFileSync(join(m.proj, ".set/handoff/1123-abcd--t.md"), SHEET)
+  put('set-claude-handoff hook reinject')
+  assert.equal(sh(line("reinject"), m.env, { session_id: "ffff1111-x", source: "clear", cwd: m.proj }).stdout, "", "the plugin line says nothing")
+})
