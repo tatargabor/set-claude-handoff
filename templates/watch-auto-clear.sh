@@ -167,6 +167,12 @@ log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 # per-watcher temp dir (a string set would need declare -A, which macOS bash 3.2 lacks).
 NO_DEDUPE_DIR="${CLAUDE_CODE_TMPDIR:-${TMPDIR:-/tmp}}/set-handoff-no-dedupe-$$"
 mkdir -p "$NO_DEDUPE_DIR" 2>/dev/null || NO_DEDUPE_DIR=""
+# The dir must not outlive the watcher: otherwise one dir per lifetime accumulates in the temp
+# dir. The EXIT trap covers a normal end; INT TERM HUP clean up AND exit — a trap replaces the
+# signal's default terminate, so the explicit exit is what still ends the watcher.
+cleanup_no_dedupe() { [ -n "$NO_DEDUPE_DIR" ] && rm -rf "$NO_DEDUPE_DIR" 2>/dev/null; return 0; }
+trap cleanup_no_dedupe EXIT
+trap 'cleanup_no_dedupe; exit 0' INT TERM HUP
 
 # The verdict's SHAPE: $failed with every run of digits replaced by N — so a moving token count
 # or freshness age (the measured churn: "tokens:184211 < 400000 … (-1s old)") is not a change.

@@ -63,3 +63,9 @@ test("verdict_shape folds every run of digits: a moving token count or a ticking
   assert.equal(shapeOf("idle 55.1 min"), "idle N min", "the decimal age must fold into the same N, not survive as N.N")
   assert.notEqual(a, shapeOf("optout"), "a different gate failing is a different shape")
 })
+
+test("the watcher's no-dedupe temp dir is gone when the run is killed — one dir per watcher lifetime accumulated otherwise (every harness run ends by timeout's TERM)", () => {
+  const r = runWatcher({ tokens: 100_000, seconds: 3 })
+  const left = readdirSync(r.base).filter((n) => n.startsWith("set-handoff-no-dedupe-"))
+  assert.deepEqual(left, [], `leftover no-dedupe dirs in ${r.base}:\n${r.log}`)
+})
