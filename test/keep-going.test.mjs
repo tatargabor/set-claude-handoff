@@ -225,3 +225,6 @@ test("H1: keep-going's own nudge is never the last human prompt, even unmarked â
   assert.equal(lastHumanPrompt(lines), "human-1")
 })
 
+test("H2: the continue nudge says an outward, irreversible or permission step is never covered by earlier words â€” a consumer review saw it push a session past a mail preview's OK", () => {
+  assert.match(decideStop(base).reason, /outward, irreversible or permission step .* is never covered by earlier words/)
+})

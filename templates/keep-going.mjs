@@ -103,6 +103,7 @@ export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs,
     block: true, state: st, why: `continue ${st.count}/${o.max}`,
     reason: `[keep-going ${st.count}/${o.max}] Do not stop here — continue with the next step of the current work (the loaded handoff's next steps, if there is one). ` +
       "Do not ask permission-style questions (\"Want me to…?\", \"Shall I…?\"): if the task or the human's earlier words already cover the step, do it. " +
+      "The exception: an outward, irreversible or permission step (sending a mail, a push, publishing, a deletion, a payment, filling an approval field) is never covered by earlier words; ask it with a `NEED INPUT:` line. " +
       "Stop only when (a) you need a concrete decision from the human that nothing earlier answers — put it on its own line starting with `NEED INPUT:` — or " +
       "(b) everything is finished — start a line with `ALL DONE:`.",
   }
