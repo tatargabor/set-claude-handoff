@@ -179,6 +179,21 @@ function installAutoClear({ target, cwd, log }) {
     writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
     log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
   }
+  // The wiring stamp (change started-after-self-exclusion): the watcher's --started-after
+  // defaults to THIS moment instead of its own start, so a watcher restart stops excluding
+  // sessions that already had the hook (measured 2026-11-23: "--started-after now" excluded the
+  // arming session itself — one tree's only working session, skipped 2858 times). ONE line,
+  // ISO-8601 UTC with Z, parsed with Date.parse. Written only when absent: a re-run that moved
+  // it would push every session started since the first install behind the filter. set-core's
+  // default install reads this same file instead of recording its own install time.
+  const stamp = join(cwd, ".set", "handoff", ".reload-wired-at")
+  if (existsSync(stamp)) {
+    log(`kept      ${rel(cwd, stamp)}  (the wiring stamp — written once, never moved)`)
+  } else {
+    mkdirSync(dirname(stamp), { recursive: true })
+    writeFileSync(stamp, new Date().toISOString().replace(/\.\d{3}Z$/, "Z") + "\n")
+    log(`created   ${rel(cwd, stamp)}  (the wiring stamp — the watcher's --started-after default)`)
+  }
   log(`
 Next, merge YOURSELF (init never touches these — they are consumer-owned):
 

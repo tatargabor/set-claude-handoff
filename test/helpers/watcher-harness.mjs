@@ -19,13 +19,18 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5 }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, startedAtMin = 120, wiredAtMin = null, wiredStamp = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   const hd = join(proj, ".set/handoff")
   for (const d of [join(home, ".claude/sessions"), hd, bin]) mkdirSync(d, { recursive: true })
   writeFileSync(join(home, ".claude/sessions", `${PID}.json`),
-    JSON.stringify({ pid: Number(PID), sessionId: SID, cwd: proj, startedAt: Date.now() - 120 * 60_000 }))
+    JSON.stringify({ pid: Number(PID), sessionId: SID, cwd: proj, startedAt: Date.now() - startedAtMin * 60_000 }))
+  // The wiring stamp (change started-after-self-exclusion): wiredAtMin backdates it that many
+  // minutes; wiredStamp writes raw content (the corrupt-stamp cases).
+  if (wiredStamp != null) writeFileSync(join(hd, ".reload-wired-at"), wiredStamp)
+  else if (wiredAtMin != null) writeFileSync(join(hd, ".reload-wired-at"),
+    new Date(Date.now() - wiredAtMin * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z") + "\n")
   const tdir = join(home, ".claude/projects", proj.replace(/\//g, "-"))
   mkdirSync(tdir, { recursive: true })
   const lastAt = idleMin == null ? null : Date.now() - idleMin * 60_000
@@ -55,13 +60,17 @@ esac
 exit 0
 `)
   chmodSync(join(bin, "tmux"), 0o755)
-  spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
+  const run = spawnSync("timeout", [String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
     env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
+  const excluded = join(hd, `.excluded-${S8}`)
   return {
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
-    log, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
+    log, stderr: run.stderr ?? "",
+    excluded: existsSync(excluded) ? excluded : null,
+    excludedBody: existsSync(excluded) ? readFileSync(excluded, "utf8") : null,
+    record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
     record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }
 }
