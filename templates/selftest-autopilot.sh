@@ -34,7 +34,7 @@ launch() { # $1 = name, $2 = dir
   T new-session -d -s "$1" -x 200 -y 50 -c "$2" \
     "env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT claude --model $MODEL"
   sleep 6
-  if T capture-pane -p -t "$1" | grep -qi "trust"; then T send-keys -t "$1" Enter; sleep 4; fi
+  if T capture-pane -p -t "$1" | grep -qi "trust"; then T send-keys -t "$1" Down Enter; sleep 4; fi   # "Yes, I trust"; a bare Enter is "No, exit" on 2.1.330
 }
 
 # Text and Enter as SEPARATE writes (measured: Enter in the same write can be swallowed).

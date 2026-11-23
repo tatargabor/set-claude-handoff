@@ -17,13 +17,18 @@
 #   - a dead pane looks like a dead server — remain-on-exit keeps the corpse readable.
 #
 # Run it in YOUR terminal (not from inside another claude's sandboxed shell — sandboxes may
-# refuse pty creation). Prereqs: tmux; `claude` on PATH. Everything is killed at the end.
+# refuse pty creation). Prereqs: tmux; `claude` on PATH. Runs on a private tmux socket;
+# everything on it is killed at the end, nothing on the default server is touched.
 set -u
 
 SESSION="handoff-selftest-$$"
 DIR="$(mktemp -d /tmp/handoff-selftest.XXXXXX)"
 fail() { echo "FAIL: $*"; tmux kill-server 2>/dev/null; rm -rf "$DIR"; exit 1; }
 command -v tmux >/dev/null || fail "tmux not installed — no external writer for the pilot"
+# A PRIVATE tmux server. The watchers and the fleet's agents live on the default one, and the
+# kill-server calls below would end every one of them (measured 2026-11-23).
+SOCK="handoff-selftest-$$"
+tmux() { command tmux -L "$SOCK" "$@"; }
 command -v claude >/dev/null || fail "claude not on PATH"
 
 # 1+2. bash probe: do send-keys land in a pane at all?
