@@ -163,3 +163,21 @@ test("init --auto-clear prints keep-going hooks WITHOUT --threshold — a number
   assert.ok(kg.length >= 2, `keep-going hook lines printed:\n${out.join("\n")}`)
   for (const l of kg) assert.doesNotMatch(l, /--threshold/, l)
 })
+
+test("a project init warns when a user-level skill copy shadows it and differs — measured 2026-11-23: 928 of 938 handoff loads came from ~/.claude/skills, whose auto-clear copy was two months stale", () => {
+  const dir = mkdtempSync(join(tmpdir(), "init-shadow-"))
+  const home = mkdtempSync(join(tmpdir(), "home-shadow-"))
+  mkdirSync(join(home, ".claude/skills/auto-clear"), { recursive: true })
+  writeFileSync(join(home, ".claude/skills/auto-clear/SKILL.md"), "# an old copy\n1. limit (default 500k)\n")
+  const out = []
+  cmdInit({ cwd: dir, home, log: (l) => out.push(l) })
+  const text = out.join("\n")
+  assert.match(text, /user-level copy SHADOWS/)
+  assert.match(text, /skills\/auto-clear\/SKILL\.md/)
+  assert.match(text, /init --global/)
+
+  const home2 = mkdtempSync(join(tmpdir(), "home-clean-"))
+  const out2 = []
+  cmdInit({ cwd: mkdtempSync(join(tmpdir(), "init-clean-")), home: home2, log: (l) => out2.push(l) })
+  assert.doesNotMatch(out2.join("\n"), /SHADOWS/, "no global copy, no warning")
+})

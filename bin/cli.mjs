@@ -70,8 +70,30 @@ function main(argv) {
   }
 }
 
-export function cmdInit({ global = false, autoClear = false, autopilot = false, cwd = process.cwd(), log = console.log } = {}) {
-  const target = global ? join(homedir(), ".claude") : join(cwd, ".claude")
+/**
+ * A user-level skill of the same name SHADOWS the project's copy. Measured 2026-11-23 from the
+ * transcripts on one machine: 928 of 938 handoff loads and 297 of 297 auto-clear loads came from
+ * ~/.claude/skills/, and the global auto-clear copy was two months behind (it still taught 500k and
+ * background blocking on). So the project upgrade this init performs reaches nobody while a stale
+ * global copy exists — announce it, never silently.
+ */
+export function warnShadowingGlobal({ home = homedir(), log = console.log } = {}) {
+  const stale = []
+  for (const name of ["handoff", "auto-clear", "autopilot"]) {
+    const g = join(home, ".claude", "skills", name, "SKILL.md")
+    const pkg = join(PKG_ROOT, "skills", name, "SKILL.md")
+    if (existsSync(g) && existsSync(pkg) && readFileSync(g, "utf8") !== readFileSync(pkg, "utf8")) stale.push(g)
+  }
+  if (stale.length === 0) return []
+  log(`\n⚠ A user-level copy SHADOWS this project's skill, and it differs from this package version:`)
+  for (const g of stale) log(`    ${g}`)
+  log(`  Claude Code loads the user-level skill, so the copy just written here is not the one sessions read.`)
+  log(`  Refresh it with \`set-claude-handoff init --global\` (a hand edit in it is overwritten), or delete it.`)
+  return stale
+}
+
+export function cmdInit({ global = false, autoClear = false, autopilot = false, cwd = process.cwd(), log = console.log, home = homedir() } = {}) {
+  const target = global ? join(home, ".claude") : join(cwd, ".claude")
   const skillDir = join(target, "skills", "handoff")
 
   mkdirSync(skillDir, { recursive: true })
@@ -91,6 +113,8 @@ export function cmdInit({ global = false, autoClear = false, autopilot = false, 
 
   if (autoClear) installAutoClear({ target, cwd, log })
   if (autopilot) installAutopilot({ target, cwd, log })
+
+  if (!global) warnShadowingGlobal({ home, log })
 
   if (global) {
     // The profile describes ONE project's probes, so a user-wide install has nothing to put in
