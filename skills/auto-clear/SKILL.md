@@ -78,10 +78,15 @@ it you use the defaults and SAY so.
       --auto-continue '<from profile, or: default>'"
    ```
    No `--started-after` here: the filter then defaults to the tree's recorded wiring time
-   (`.set/handoff/.reload-wired-at` — ONE ISO-8601 UTC-with-Z line, written once by
-   `init --auto-clear`, never rewritten), so a watcher restart does not exclude sessions that
-   already had the hook. Pass `--started-after <iso>` explicitly only when no stamp exists — and
-   then every session started before that moment is excluded, this arming session included.
+   (`.set/handoff/.reload-wired-at` — ONE ISO-8601 UTC-with-Z line, never rewritten), so a
+   watcher restart does not exclude sessions that already had the hook. `init --auto-clear`
+   writes it only when a `.claude/settings*.json` already wires the reload hook, and its value
+   is that file's mtime — at or after the real wiring edit, so it errs late (safe). Where no
+   settings file wires it yet, init writes NOTHING and says so (`not yet …`): merge the hook
+   first, then re-run `init --auto-clear` (or write the stamp by hand:
+   `date -u +%Y-%m-%dT%H:%M:%SZ > .set/handoff/.reload-wired-at`). Pass `--started-after <iso>`
+   explicitly only when no stamp exists — and then every session started before that moment is
+   excluded, this arming session included.
    For reboot survival, install a `systemd --user` unit running the same
    command with `Restart=on-failure` and say you did.
 4. **VERIFY** — an armed state without evidence is not armed:

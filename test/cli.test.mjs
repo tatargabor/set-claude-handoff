@@ -10,6 +10,8 @@ import { cmdInit } from "../bin/cli.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const silent = () => {}
+// The reload hook wired the way init prints it — what projectWires(cwd, "reinject") recognises.
+const WIRED_SETTINGS = JSON.stringify({ hooks: { SessionStart: [ { matcher: "clear|compact", hooks: [ { type: "command", command: "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/handoff-reinject-clear.mjs\"", timeout: 15 } ] } ] } })
 
 function project(files = {}) {
   const dir = mkdtempSync(join(tmpdir(), "handoff-test-"))
@@ -164,8 +166,29 @@ test("init --auto-clear prints keep-going hooks WITHOUT --threshold — a number
   for (const l of kg) assert.doesNotMatch(l, /--threshold/, l)
 })
 
+test("init --auto-clear writes the wiring stamp only when the reload hook is ALREADY wired — 'now' was wrong both ways: on a tree wired long ago it re-excluded every running session, and on a first install it landed before the hand-merge of the hook, so sessions started in between passed the filter with no hook (the unsafe direction)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "init-unwired-"))
+  const out = []
+  cmdInit({ cwd: dir, autoClear: true, log: (l) => out.push(l) })
+  assert.ok(!existsSync(join(dir, ".set/handoff/.reload-wired-at")), "no wiring, no stamp")
+  const text = out.join("\n")
+  assert.match(text, /not yet  \.set\/handoff\/\.reload-wired-at — the reload hook is not wired/, "the absence is announced")
+  assert.match(text, /re-run init --auto-clear/, "with the recovery: merge the hook, then re-run")
+})
+
+test("a wired tree's wiring stamp is the settings file's mtime — at or after the real wiring edit, so the watcher's filter errs late (safe), never early", () => {
+  const dir = project({ ".claude/settings.json": WIRED_SETTINGS })
+  const wired = new Date(Date.now() - 90 * 24 * 3600_000); wired.setUTCMilliseconds(0)
+  utimesSync(join(dir, ".claude/settings.json"), wired, wired)
+  cmdInit({ cwd: dir, autoClear: true, log: silent })
+  const stamp = readFileSync(join(dir, ".set/handoff/.reload-wired-at"), "utf8")
+  assert.equal(stamp, wired.toISOString().replace(/\.\d{3}Z$/, "Z") + "\n", "the stamp is the wiring file's mtime, not init's now")
+})
+
 test("init --auto-clear stamps the wiring time ONCE — a re-run never moves it, or every session started since the first install would fall behind the watcher's filter (change started-after-self-exclusion)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "init-stamp-"))
+  const dir = project({ ".claude/settings.json": WIRED_SETTINGS })
+  const wired = new Date(Date.now() - 30 * 24 * 3600_000); wired.setUTCMilliseconds(0)
+  utimesSync(join(dir, ".claude/settings.json"), wired, wired)
   cmdInit({ cwd: dir, autoClear: true, log: silent })
   const stamp = join(dir, ".set/handoff/.reload-wired-at")
   const body = readFileSync(stamp, "utf8")
