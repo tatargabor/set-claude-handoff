@@ -165,6 +165,7 @@ test("keep-going at the limit: a handoff 20 min old with 20 min of work after it
     { type: "user", uuid: "u1", message: { role: "user", content: "go" } },
     { type: "assistant", timestamp: new Date(lastAt).toISOString(), message: { content: [{ type: "text", text: "Step 9 done." }], usage: { input_tokens: 0, cache_read_input_tokens: 410_000 } } },
   ].map((e) => JSON.stringify(e)).join("\n") + "\n")
+  mkdirSync(join(dir, ".claude/hooks"), { recursive: true }); writeFileSync(join(dir, ".claude/hooks/watch-auto-clear.sh"), "")
   const marker = join(hd, ".written-kkkk2222")
   writeFileSync(marker, "x 1123-cccc--t.md\n")
   const t = new Date(lastAt - 20 * 60_000); utimesSync(marker, t, t)
@@ -240,4 +241,22 @@ test("M3: the kill switch is found from CLAUDE_PROJECT_DIR, not the shell's cwd 
     env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli", CLAUDE_PROJECT_DIR: dir } })
   assert.equal(out, "", "the project's .no-keepgoing holds in a subdirectory")
   assert.ok(!existsSync(join(dir, "sub/.set")), "nothing is written under the subdirectory")
+})
+
+test("M5: no auto-clear watcher in the project ⇒ no handoff demand at the limit, only the continue rule — a consumer review found sessions told to write handoffs nobody would clear (2026-11-08)", () => {
+  const at = { ...base, tokens: 410_000 }
+  assert.match(decideStop({ ...at, autoClear: false }).reason, /keep-going 1\/40/)
+  assert.match(decideStop({ ...at, autoClear: true }).reason, /Write the handoff NOW/)
+
+  const dir = mkdtempSync(join(tmpdir(), "kg-m5-"))
+  const tr = join(dir, "t.jsonl")
+  writeFileSync(tr, [
+    { type: "user", uuid: "u1", message: { role: "user", content: "go" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "Step done." }], usage: { input_tokens: 0, cache_read_input_tokens: 410_000 } } },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n")
+  const run = (mode) => execFileSync("node", [new URL("../templates/keep-going.mjs", import.meta.url).pathname, mode], {
+    input: JSON.stringify({ session_id: "kkkk5555-x", cwd: dir, transcript_path: tr }), encoding: "utf8",
+    env: { ...process.env, CLAUDE_PROJECT_DIR: "", CLAUDE_CODE_ENTRYPOINT: "cli" } })
+  assert.equal(run("post"), "", "no early handoff warning without a watcher")
+  assert.doesNotMatch(JSON.parse(run("stop")).reason, /Write the handoff/)
 })

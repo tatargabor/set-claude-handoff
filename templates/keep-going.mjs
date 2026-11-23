@@ -74,7 +74,7 @@ function readState(path) { try { return JSON.parse(readFileSync(path, "utf8")) }
  * The Stop decision as a pure function of what the hook can see — the tests drive this directly.
  * Returns { block: boolean, reason?: string, why: string, state }.
  */
-export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs, markerFresh, killed, human, state = {}, opts = {} }) {
+export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs, markerFresh, killed, human, state = {}, opts = {}, autoClear = true }) {
   const o = { ...DEFAULTS, ...opts }
   // `?? null` on both sides so an empty state and "no human prompt found" compare equal; the
   // stored state carries `human` forward, so a budget with no human prompt still runs out (tested).
@@ -83,7 +83,9 @@ export function decideStop({ message, backgroundTasks = [], tokens, markerAgeMs,
   if (backgroundTasks.length) return { block: false, why: `${backgroundTasks.length} background task(s) running — their notification wakes the session`, state: st }
   const mark = STOP_MARK.exec(message ?? "")
   if (mark) return { block: false, why: `the message says ${mark[1].toUpperCase()}`, state: st }
-  if (tokens != null && tokens >= o.threshold) {
+  // The handoff demand exists for the auto-clear watcher to act on. Without one, it would keep a
+  // session writing handoffs nobody clears (consumer review 2026-11-08, M5), so only the continue rule runs.
+  if (autoClear && tokens != null && tokens >= o.threshold) {
     // Fresh = the gate's definition (the handoff was the last act) when the caller measured it; the
     // age rule is only the fallback. A handoff 20 min old with 20 min of work after it is NOT fresh:
     // the gate would refuse the clear, so the stop must not wait for one.
@@ -134,10 +136,12 @@ function context(ev) {
   const markerPath = join(dir, `.written-${s8}`)
   let markerAgeMs = null
   try { markerAgeMs = Date.now() - statSync(markerPath).mtimeMs } catch { /* not armed */ }
+  // the auto-clear half is per project: the watcher init installs beside this hook
+  const autoClear = existsSync(join(projectDir(ev), ".claude", "hooks", "watch-auto-clear.sh"))
   const killed = existsSync(join(dir, ".no-keepgoing")) ? ".no-keepgoing"
     : existsSync(join(dir, `.no-keepgoing-${s8}`)) ? `.no-keepgoing-${s8}` : null
   const markerFresh = markerAgeMs == null ? false : markerFreshness({ dir, s8, transcriptPath: ev.transcript_path }).fresh
-  return { dir, s8, lines, tokens: tok.tokens, markerAgeMs, markerFresh, killed, statePath: join(dir, `.keepgoing-${s8}.json`) }
+  return { dir, s8, lines, tokens: tok.tokens, markerAgeMs, markerFresh, killed, autoClear, statePath: join(dir, `.keepgoing-${s8}.json`) }
 }
 
 function log(dir, line) {
@@ -166,7 +170,7 @@ async function main(argv) {
   if (mode === "post") {
     // An early warning inside a long turn: the Stop check only runs at the END of a turn.
     const o = { ...DEFAULTS, ...opts }
-    if (c.killed || c.tokens == null || c.tokens < o.threshold) return 0
+    if (!c.autoClear || c.killed || c.tokens == null || c.tokens < o.threshold) return 0
     if (c.markerFresh ?? (c.markerAgeMs != null && c.markerAgeMs <= o.markerFreshMs)) return 0
     const st = readState(c.statePath)
     if (st.postAt && Date.now() - st.postAt < o.postEveryMs) return 0
@@ -183,7 +187,7 @@ async function main(argv) {
   const d = decideStop({
     message, backgroundTasks: Array.isArray(ev.background_tasks) ? ev.background_tasks : [],
     tokens: c.tokens, markerAgeMs: c.markerAgeMs, markerFresh: c.markerFresh, killed: c.killed, human: lastHumanPrompt(c.lines),
-    state: readState(c.statePath), opts,
+    state: readState(c.statePath), opts, autoClear: c.autoClear,
   })
   if (d.block) {
     // The budget lives in the state file. If it cannot be written, every Stop starts at 1/40 again,

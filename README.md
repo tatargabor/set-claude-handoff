@@ -177,7 +177,10 @@ limit it writes its own handoff, so auto-clear can clear it and continue it from
   or `ALL DONE:`, while background tasks run, or when the kill switch
   `.set/handoff/.no-keepgoing` exists. A question like "Want me to push?" does **not** stop it.
 - At the threshold it asks for the handoff instead (Write/Edit, never Bash), and once the sheet
-  is armed it lets the stop through, so the watcher can clear.
+  is armed it lets the stop through, so the watcher can clear. It asks only where the watcher is
+  installed (`.claude/hooks/watch-auto-clear.sh`); elsewhere a handoff nobody clears is not asked for.
+- An outward, irreversible or permission step (a mail, a push, a deletion…) is never covered by
+  earlier words: the nudge tells the session to ask it with a `NEED INPUT:` line.
 - A budget (`--max`, default 40) counts its own nudges since the last human prompt and stops the
   chain when spent. Its nudges are `isMeta` in the transcript, so they never reset it.
 - `handoff-arm.mjs` (PostToolUse) is what arms a session: it writes `.written-<session8>` when
