@@ -8,11 +8,11 @@
  * A skill upgrade that clobbers the project's probes would make upgrading unsafe, so nobody
  * would upgrade.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, realpathSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { cmdHook, cmdWatch, cmdPluginFiles } from "./plugin.mjs"
+import { cmdHook, cmdWatch, cmdPluginFiles, projectWires } from "./plugin.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const VERSION = JSON.parse(readFileSync(join(PKG_ROOT, "package.json"), "utf8")).version
@@ -178,6 +178,36 @@ function installAutoClear({ target, cwd, log }) {
     const dst = join(hooksDir, f.split("/").pop())
     writeFileSync(dst, readFileSync(src, "utf8"), { mode: f.endsWith(".sh") ? 0o755 : 0o644 })
     log(`installed ${rel(cwd, dst)}  (package-owned — overwritten on re-run)`)
+  }
+  // The wiring stamp (change started-after-self-exclusion): the watcher's --started-after
+  // defaults to THIS moment instead of its own start, so a watcher restart stops excluding
+  // sessions that already had the hook (measured 2026-11-23: "--started-after now" excluded the
+  // arming session itself — one tree's only working session, skipped 2858 times). ONE line,
+  // ISO-8601 UTC with Z, parsed with Date.parse. Written only when absent: a re-run that moved
+  // it would push every session started since the first install behind the filter. set-core's
+  // default install reads this same file instead of recording its own install time.
+  const stamp = join(cwd, ".set", "handoff", ".reload-wired-at")
+  if (existsSync(stamp)) {
+    log(`kept      ${rel(cwd, stamp)}  (the wiring stamp — written once, never moved)`)
+  } else if (projectWires(cwd, "reinject")) {
+    // The stamp's meaning: sessions started after it have the reload hook. Only a settings file
+    // that already wires the hook can prove that moment — "now" is wrong both ways: on a tree
+    // wired long ago it re-excludes every running session (the very bug the stamp exists to fix),
+    // and on a first install it lands BEFORE the hand-merge of the hook into settings, so sessions
+    // started in between pass the filter with no hook (the unsafe direction). The wiring file's
+    // own mtime is at or after its wiring edit, so it errs late = safe.
+    let wiredAt = 0
+    for (const f of ["settings.json", "settings.local.json"]) {
+      const p = join(cwd, ".claude", f)
+      try {
+        if (readFileSync(p, "utf8").includes("reinject")) { wiredAt = statSync(p).mtimeMs; break }
+      } catch { /* absent */ }
+    }
+    mkdirSync(dirname(stamp), { recursive: true })
+    writeFileSync(stamp, new Date(wiredAt).toISOString().replace(/\.\d{3}Z$/, "Z") + "\n")
+    log(`created   ${rel(cwd, stamp)}  (the wiring stamp — the watcher's --started-after default)`)
+  } else {
+    log(`not yet  ${rel(cwd, stamp)} — the reload hook is not wired in .claude/settings.json yet; after merging it, re-run init --auto-clear (or write the stamp: date -u +%Y-%m-%dT%H:%M:%SZ > .set/handoff/.reload-wired-at)`)
   }
   log(`
 Next, merge YOURSELF (init never touches these — they are consumer-owned):

@@ -19,7 +19,8 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false,
+  startedAtMin = 120, wiredAtMin = null, wiredStamp = null, excluded = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   // A temp dir the WATCHER cannot create its no-dedupe dir in (chmod 555 blocks a non-root writer;
@@ -29,7 +30,12 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
   const hd = join(proj, ".set/handoff")
   for (const d of [join(home, ".claude/sessions"), hd, bin]) mkdirSync(d, { recursive: true })
   writeFileSync(join(home, ".claude/sessions", `${PID}.json`),
-    JSON.stringify({ pid: Number(PID), sessionId: SID, cwd: proj, startedAt: Date.now() - 120 * 60_000 }))
+    JSON.stringify({ pid: Number(PID), sessionId: SID, cwd: proj, startedAt: Date.now() - startedAtMin * 60_000 }))
+  // The wiring stamp (change started-after-self-exclusion): wiredAtMin backdates it that many
+  // minutes; wiredStamp writes raw content (the corrupt-stamp cases).
+  if (wiredStamp != null) writeFileSync(join(hd, ".reload-wired-at"), wiredStamp)
+  else if (wiredAtMin != null) writeFileSync(join(hd, ".reload-wired-at"),
+    new Date(Date.now() - wiredAtMin * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z") + "\n")
   const tdir = join(home, ".claude/projects", proj.replace(/\//g, "-"))
   mkdirSync(tdir, { recursive: true })
   const lastAt = idleMin == null ? null : Date.now() - idleMin * 60_000
@@ -42,6 +48,9 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
     writeFileSync(record, nudgeRecord)
     if (nudgeRecordAgeMin != null) { const t = new Date(Date.now() - nudgeRecordAgeMin * 60_000); utimesSync(record, t, t) }
   }
+  // A pre-existing .excluded-<S8> record: a body string for the stale-record case, "" for the
+  // 0-byte disk-full leftover (tests must say which bug they pre-create).
+  if (excluded != null) writeFileSync(join(hd, `.excluded-${S8}`), excluded)
   if (marker) {
     writeFileSync(join(hd, "1123-aaaa--thread.md"), "# thread\n")
     const m = join(hd, `.written-${S8}`)
@@ -76,10 +85,13 @@ exit 0
     env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
+  const excludedPath = join(hd, `.excluded-${S8}`)
   return {
     status: run.status, stderr: run.stderr ?? "",
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
     log, log1: existsSync(`${logPath}.1`) ? readFileSync(`${logPath}.1`, "utf8") : null,
+    excluded: existsSync(excludedPath) ? excludedPath : null,
+    excludedBody: existsSync(excludedPath) ? readFileSync(excludedPath, "utf8") : null,
     base, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
     record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, symlinkSync, utimesSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -10,6 +10,8 @@ import { cmdInit } from "../bin/cli.mjs"
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 const silent = () => {}
+// The reload hook wired the way init prints it — what projectWires(cwd, "reinject") recognises.
+const WIRED_SETTINGS = JSON.stringify({ hooks: { SessionStart: [ { matcher: "clear|compact", hooks: [ { type: "command", command: "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/handoff-reinject-clear.mjs\"", timeout: 15 } ] } ] } })
 
 function project(files = {}) {
   const dir = mkdtempSync(join(tmpdir(), "handoff-test-"))
@@ -162,6 +164,44 @@ test("init --auto-clear prints keep-going hooks WITHOUT --threshold — a number
   const kg = out.join("\n").split("\n").filter((l) => l.includes("keep-going.mjs\\\" "))
   assert.ok(kg.length >= 2, `keep-going hook lines printed:\n${out.join("\n")}`)
   for (const l of kg) assert.doesNotMatch(l, /--threshold/, l)
+})
+
+test("init --auto-clear writes the wiring stamp only when the reload hook is ALREADY wired — 'now' was wrong both ways: on a tree wired long ago it re-excluded every running session, and on a first install it landed before the hand-merge of the hook, so sessions started in between passed the filter with no hook (the unsafe direction)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "init-unwired-"))
+  const out = []
+  cmdInit({ cwd: dir, autoClear: true, log: (l) => out.push(l) })
+  assert.ok(!existsSync(join(dir, ".set/handoff/.reload-wired-at")), "no wiring, no stamp")
+  const text = out.join("\n")
+  assert.match(text, /not yet  \.set\/handoff\/\.reload-wired-at — the reload hook is not wired/, "the absence is announced")
+  assert.match(text, /re-run init --auto-clear/, "with the recovery: merge the hook, then re-run")
+})
+
+test("a wired tree's wiring stamp is the settings file's mtime — at or after the real wiring edit, so the watcher's filter errs late (safe), never early", () => {
+  const dir = project({ ".claude/settings.json": WIRED_SETTINGS })
+  const wired = new Date(Date.now() - 90 * 24 * 3600_000); wired.setUTCMilliseconds(0)
+  utimesSync(join(dir, ".claude/settings.json"), wired, wired)
+  cmdInit({ cwd: dir, autoClear: true, log: silent })
+  const stamp = readFileSync(join(dir, ".set/handoff/.reload-wired-at"), "utf8")
+  assert.equal(stamp, wired.toISOString().replace(/\.\d{3}Z$/, "Z") + "\n", "the stamp is the wiring file's mtime, not init's now")
+})
+
+test("init --auto-clear stamps the wiring time ONCE — a re-run never moves it, or every session started since the first install would fall behind the watcher's filter (change started-after-self-exclusion)", () => {
+  const dir = project({ ".claude/settings.json": WIRED_SETTINGS })
+  const wired = new Date(Date.now() - 30 * 24 * 3600_000); wired.setUTCMilliseconds(0)
+  utimesSync(join(dir, ".claude/settings.json"), wired, wired)
+  cmdInit({ cwd: dir, autoClear: true, log: silent })
+  const stamp = join(dir, ".set/handoff/.reload-wired-at")
+  const body = readFileSync(stamp, "utf8")
+  assert.match(body, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\n$/, "ONE line, ISO-8601 UTC with Z, parsed with Date.parse")
+  assert.ok(Number.isFinite(Date.parse(body.trim())), "the stamp is a date")
+  const old = new Date(Date.now() - 90 * 24 * 3600_000)
+  utimesSync(stamp, old, old)
+  cmdInit({ cwd: dir, autoClear: true, log: silent })
+  assert.equal(readFileSync(stamp, "utf8"), body, "the content survives a re-run")
+  assert.ok(Math.abs(statSync(stamp).mtimeMs - old.getTime()) < 5000, "the re-run did not even touch the file")
+  const plain = mkdtempSync(join(tmpdir(), "init-nostamp-"))
+  cmdInit({ cwd: plain, log: silent })
+  assert.ok(!existsSync(join(plain, ".set/handoff/.reload-wired-at")), "no --auto-clear, no wiring, no stamp")
 })
 
 test("a project init warns when a user-level skill copy shadows it and differs — measured 2026-11-23: 928 of 938 handoff loads came from ~/.claude/skills, whose auto-clear copy was two months stale", () => {
