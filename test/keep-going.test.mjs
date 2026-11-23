@@ -178,3 +178,15 @@ test("keep-going's default threshold IS the gate's — one constant, so a gate c
   const { DEFAULT_THRESHOLD } = await import("../templates/clear-gate.mjs")
   assert.equal(DEFAULTS.threshold, DEFAULT_THRESHOLD)
 })
+
+test("a handoff written under a hand-typed, non-hex ID is announced, not silently left unarmed — measured 2026-11-23: `1102-n8gt--….md` kept its session unarmed for two days with no word why", () => {
+  const dir = mkdtempSync(join(tmpdir(), "arm-misnamed-"))
+  mkdirSync(join(dir, ".set/handoff"), { recursive: true })
+  const run = (name) => execFileSync("node", [new URL("../templates/handoff-arm.mjs", import.meta.url).pathname], {
+    input: JSON.stringify({ tool_name: "Write", session_id: "abcd1234-ffff", cwd: dir, tool_input: { file_path: join(dir, ".set/handoff", name) } }), encoding: "utf8" })
+  writeFileSync(join(dir, ".set/handoff/1102-n8gt--plan.md"), "# HANDOFF: plan — 2026-11-02 · ID: 1102-n8gt\n")
+  assert.match(run("1102-n8gt--plan.md"), /NOT armed for auto-clear: a handoff file must be named/)
+  assert.match(readFileSync(join(dir, ".set/handoff/auto-clear.log"), "utf8"), /1102-n8gt--plan\.md is not a handoff path/)
+  writeFileSync(join(dir, ".set/handoff/0930-geo-research.md"), "# Research notes\n")
+  assert.equal(run("0930-geo-research.md"), "", "a parked research note (no HANDOFF header) stays quiet")
+})

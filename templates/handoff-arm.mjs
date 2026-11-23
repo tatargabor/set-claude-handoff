@@ -57,13 +57,39 @@ function log(dir, line) {
   try { mkdirSync(dir, { recursive: true }); appendFileSync(join(dir, "auto-clear.log"), `${new Date().toISOString()} ${line}\n`) } catch { /* the log is not the critical path */ }
 }
 
+/**
+ * A sheet whose NAME breaks the convention is never armed, and that used to be silent. Measured
+ * 2026-11-23: a page written as `1102-n8gt--….md` (an ID typed by hand, not from `openssl rand`) left its
+ * session unarmed for two days, and nothing said why. So a Write/Edit to a direct child of .set/handoff/
+ * whose body starts like a handoff, but whose name does not match, is announced. Research notes parked
+ * there (no `# HANDOFF` header) and machine pages stay quiet.
+ */
+export function misnamedSheet(ev) {
+  if (ev?.tool_name === "Bash") return ""
+  const p = resolve(ev?.cwd || process.cwd(), ev?.tool_input?.file_path || "")
+  if (!/\.set\/handoff\/[^/]+\.md$/.test(p) || /--allapot\.md$/.test(p) || SHEET.test(p)) return ""
+  try { return /^# HANDOFF/.test(readFileSync(p, "utf8").trimStart()) ? p : "" } catch { return "" }
+}
+
+function warnMisnamed(ev) {
+  const p = misnamedSheet(ev)
+  if (!p) return 0
+  const name = p.replace(/^.*\//, "")
+  log(dirname(p), `skip  ${ev.session_id ?? "?"}  ${name} is not a handoff path (ID must be <MMDD>-<4 hex>) — NOT armed`)
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse",
+    additionalContext: `⚠ ${name} is NOT armed for auto-clear: a handoff file must be named \`<MMDD>-<4 hex>--<slug>.md\`, with the ID taken from ` +
+      "the command (`date +%m%d` and `openssl rand -hex 2`), never typed by hand. Rename it with the right ID (and fix the header's `ID:`), then write it again with Write or Edit." } }) + "\n")
+  return 0
+}
+
 async function main() {
   let input = ""
   for await (const chunk of process.stdin) input += chunk
   let ev
   try { ev = JSON.parse(input) } catch { return 0 } // a hook error must never break the work
   const file = targetOf(ev)
-  if (!file || !existsSync(file) || !ev.session_id) return 0
+  if (!file) return warnMisnamed(ev)
+  if (!existsSync(file) || !ev.session_id) return 0
   const dir = dirname(file) // the marker lives beside the sheet — the gate reads the session's own tree
   const missing = missingParts(readFileSync(file, "utf8"))
   const r = armMarker(dir, ev.session_id, file, { passed: missing.length === 0 })
