@@ -69,6 +69,13 @@
 #                 BEFORE typing — never repeated, even after a failed write. Same presence gate;
 #                 a working turn is waited out (no Escape for a nudge).
 #
+#   --idle-minutes M / --idle-floor N   the WARM-IDLE trigger (change warm-idle-rotation), defaults 48 and
+#                 200000 in the gate, 0 disables. The runtime compacts an idle 200k+ session by itself at
+#                 ~53.8 min after its last request, a race no size threshold can win. A session idle for M
+#                 minutes at ≥ N tokens is asked for its handoff (the arm-nudge record, with the word
+#                 warm-idle) and, once armed by its own last act, cleared. Never with an Escape: the turn
+#                 must already be idle. Past 54 min it is left alone, and "warm-idle missed" is logged once.
+#
 #   --compact-on-background true   when ONLY running background work refuses the clear (the gate's
 #                 action `compact`), type /compact instead: the session — and its background agents —
 #                 survive; the session's marker is removed after it, so the next one needs a fresh
@@ -84,7 +91,8 @@
 #   <root>/.set/handoff/auto-clear.log     one line per verdict
 set -u
 
-ARM_NUDGE="true"; NUDGE_RATIO=""
+ARM_NUDGE="true"; NUDGE_RATIO=""; IDLE_MINUTES=""; IDLE_FLOOR=""
+WARM_MISSED=" "   # sessions whose missed warm window was logged (a string set: macOS bash 3.2 has no -A)
 DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
@@ -105,6 +113,8 @@ while [ $# -gt 0 ]; do
     --compact-threshold) COMPACT_THRESHOLD="$2"; shift 2;;
     --arm-nudge) ARM_NUDGE="$2"; shift 2;;
     --nudge-ratio) NUDGE_RATIO="$2"; shift 2;;
+    --idle-minutes) IDLE_MINUTES="$2"; shift 2;;
+    --idle-floor) IDLE_FLOOR="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -503,20 +513,21 @@ pane_of_pid() {
 # threshold that was never nudged. The record is created with noclobber (O_EXCL) BEFORE typing, so two
 # passes — or two watchers — can never type it twice; a write that fails types nothing.
 NUDGE_TEXT="/handoff"
-nudge_record() { # $1 = tree, $2 = sid → rc 0 only when THIS call created the record
+nudge_record() { # $1 = tree, $2 = sid, $3 = trigger (size|warm-idle) → rc 0 only when THIS call created the record
   local s8 f
   s8=$(printf '%s' "$2" | tr -cd 'a-zA-Z0-9' | cut -c1-8)
   f="$1/.set/handoff/.handoff-nudged-$s8"
   [ -e "$f" ] && { log "nudge $2  already recorded in $(basename "$f") — never repeated"; return 1; }
-  if ( set -C; printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NUDGE_TEXT" > "$f" ) 2>/dev/null && [ -s "$f" ]; then
+  if ( set -C; printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$NUDGE_TEXT" "${3:-size}" > "$f" ) 2>/dev/null && [ -s "$f" ]; then
     return 0
   fi
   log "NUDGE FAILED  $2  could not create $f (taken, or disk full?) — not typing"
   return 1
 }
 nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
-  local pane label pres turn tokens
+  local pane label pres turn tokens why
   tokens=$(printf '%s' "$4" | jq -r '.nudge.tokens // "?"' 2>/dev/null)
+  why=$(printf '%s' "$4" | jq -r '.nudge.trigger // "size"' 2>/dev/null)
   pane=$(pane_of_pid "$3")
   if [ -n "$pane" ]; then
     pres=$(presence_tmux "$pane"); turn=$(turn_tmux "$pane")
@@ -528,14 +539,14 @@ nudge_session() { # $1 = tree, $2 = sid, $3 = pid, $4 = verdict
   safe_to_type "$pres" || { log "nudge $2  due at $tokens but presence=$pres — a human may be typing; not this pass"; return 0; }
   [ "$turn" = "idle" ] || { log "nudge $2  due at $tokens but turn=$turn — waits (no Escape for a nudge)"; return 0; }
   if [ "$DRY" = "1" ]; then log "dry   $2  nudge due at $tokens — would type $NUDGE_TEXT once"; return 0; fi
-  nudge_record "$1" "$2" || return 0
+  nudge_record "$1" "$2" "$why" || return 0
   typed "$1" nudge "$NUDGE_TEXT" "$2" "$3"
   if [ -n "$pane" ]; then
     tmux send-keys -t "$pane" -l "$NUDGE_TEXT"; sleep 0.3; tmux send-keys -t "$pane" Enter
-    log "NUDGE $2  $NUDGE_TEXT → pane $pane at $tokens tokens (unarmed, idle; recorded — never repeated)"
+    log "NUDGE $2  $NUDGE_TEXT → pane $pane at $tokens tokens (trigger=$why; unarmed, idle; recorded — never repeated)"
   elif fleet_write "$label" "$NUDGE_TEXT"; then
     sleep 0.3; fleet_owner_enter "$label"
-    log "NUDGE $2  $NUDGE_TEXT → fleet agent $label at $tokens tokens (unarmed, idle; recorded — never repeated)"
+    log "NUDGE $2  $NUDGE_TEXT → fleet agent $label at $tokens tokens (trigger=$why; unarmed, idle; recorded — never repeated)"
   else
     log "NUDGE FAILED  $2  owner-write to $label — recorded anyway, never retried"
   fi
@@ -550,7 +561,7 @@ is_descendant() {
   return 1
 }
 
-log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off) arm-nudge=$([ "$ARM_NUDGE" = "true" ] && echo "on (ratio ${NUDGE_RATIO:-default})" || echo off)"
+log "watcher started dir=$DIR interval=${INTERVAL}s threshold=${THRESHOLD:-default} bg-blocks=$BG started-after=${AFTER:-any} dry-run=$DRY auto-continue=$([ -n "$CONTINUE_PROMPT" ] && echo on || echo off) autopilot=$([ "$AUTOPILOT" = "1" ] && echo on || echo off) compact-on-background=$([ "$COMPACT_BG" = "true" ] && echo "on (≥ ${COMPACT_THRESHOLD:-default})" || echo off) arm-nudge=$([ "$ARM_NUDGE" = "true" ] && echo "on (ratio ${NUDGE_RATIO:-default})" || echo off) warm-idle=$([ "${IDLE_MINUTES:-48}" = "0" ] || [ "${IDLE_FLOOR:-200000}" = "0" ] && echo off || echo "on (${IDLE_MINUTES:-48} min, floor ${IDLE_FLOOR:-200000})")"
 while :; do
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue
@@ -572,13 +583,20 @@ while :; do
     [ -n "$COMPACT_THRESHOLD" ] && gate_args+=(--compact-threshold "$COMPACT_THRESHOLD")
     if [ "$ARM_NUDGE" = "true" ]; then [ -n "$NUDGE_RATIO" ] && gate_args+=(--nudge-ratio "$NUDGE_RATIO")
     else gate_args+=(--nudge-ratio 0); fi
+    [ -n "$IDLE_MINUTES" ] && gate_args+=(--idle-minutes "$IDLE_MINUTES")
+    [ -n "$IDLE_FLOOR" ] && gate_args+=(--idle-floor "$IDLE_FLOOR")
     verdict=$(node "$GATE" "${gate_args[@]}" 2>/dev/null) || { log "skip  $sid  gate errored"; continue; }
     eligible=$(printf '%s' "$verdict" | jq -r '.eligible // false')
     failed=$(printf '%s' "$verdict" | jq -r '[.gates[] | select(.ok == false) | .name + ":" + .detail] | join("; ")')
     action=$(printf '%s' "$verdict" | jq -r '.action // empty')
     request_refused_cleanup "$tree" "$verdict" "$sid"
+    trigger=$(printf '%s' "$verdict" | jq -r '.trigger // empty')
     if [ "$eligible" != "true" ] && [ "$action" != "compact" ]; then
       log "no    $sid  $failed"
+      if [ "$(printf '%s' "$verdict" | jq -r '.idle.late // false')" = "true" ] && [ "${WARM_MISSED#* $sid }" = "$WARM_MISSED" ]; then
+        WARM_MISSED="$WARM_MISSED$sid "
+        log "warm-idle missed  $sid  $(printf '%s' "$verdict" | jq -r '.idle.reason')"
+      fi
       if [ "$(printf '%s' "$verdict" | jq -r '.nudge.due // false')" = "true" ]; then
         nudge_session "$tree" "$sid" "$(jq -r '.pid // empty' "$rec" 2>/dev/null)" "$verdict"
       fi
@@ -607,6 +625,10 @@ while :; do
           log "skip  $sid  compact waits: fleet agent $label is not idle (no Escape for a compact)"
           continue
         fi
+        if [ "$trigger" = "warm-idle" ] && [ "$(turn_owner "$label")" != "idle" ]; then
+          log "skip  $sid  warm-idle waits: fleet agent $label is not idle (no Escape for an idle rotation)"
+          continue
+        fi
         if ! stop_turn turn_owner presence_owner esc_owner "$label"; then
           log "skip  $sid  turn=$(turn_owner "$label") presence=$(presence_owner "$label") on fleet agent $label after one Escape — not typing this pass"
           continue
@@ -622,7 +644,7 @@ while :; do
         claimed=""
         if [ "$CMD" = "/clear" ]; then claimed=$(request_claim "$tree" "$verdict" "$sid") || continue; fi
         fire_lock_write "$tree" "$pane_pid" "$sid" || { [ -n "$claimed" ] && mv "$claimed" "${claimed%.taken-*}" 2>/dev/null; continue; }
-        log "FIRE  $sid  $CMD → fleet owner-write to $label (all gates held, presence ok, turn stopped)"
+        log "FIRE  $sid  $CMD → fleet owner-write to $label (all gates held, presence ok, turn stopped${trigger:+, trigger=$trigger})"
         typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
         if fleet_write "$label" "$CMD"; then
           sleep 0.3
@@ -656,6 +678,10 @@ while :; do
       log "skip  $sid  compact waits: pane $pane is not idle (no Escape for a compact)"
       continue
     fi
+    if [ "$trigger" = "warm-idle" ] && [ "$(turn_tmux "$pane")" != "idle" ]; then
+      log "skip  $sid  warm-idle waits: pane $pane is not idle (no Escape for an idle rotation)"
+      continue
+    fi
     if ! stop_turn turn_tmux presence_tmux esc_tmux "$pane"; then
       log "skip  $sid  turn=$(turn_tmux "$pane") presence=$(presence_tmux "$pane") in pane $pane after one Escape — not typing this pass"
       continue
@@ -671,7 +697,7 @@ while :; do
     claimed=""
     if [ "$CMD" = "/clear" ]; then claimed=$(request_claim "$tree" "$verdict" "$sid") || continue; fi
     fire_lock_write "$tree" "$pane_pid" "$sid" || { [ -n "$claimed" ] && mv "$claimed" "${claimed%.taken-*}" 2>/dev/null; continue; }
-    log "FIRE  $sid  $CMD → pane $pane (all gates held, presence ok, turn stopped)"
+    log "FIRE  $sid  $CMD → pane $pane (all gates held, presence ok, turn stopped${trigger:+, trigger=$trigger})"
     typed "$tree" "${CMD#/}" "$CMD" "$sid" "$pane_pid"
     tmux send-keys -t "$pane" -l "$CMD"
     sleep 0.3

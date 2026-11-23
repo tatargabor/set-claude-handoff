@@ -12,9 +12,9 @@
 
 ## 3. Watcher
 
-- [ ] 3.1 `watch-auto-clear.sh`: when `idle.due` and unarmed → the nudge path (same record); when armed → the clear path with every existing gate and the fire lock; log lines name `warm-idle` [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 3.2 Flags `--idle-minutes` / `--idle-floor` (0 disables), shown in the startup line [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 3.3 Watcher-level tests with fake HOME and fake tmux, each failing without the change [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 3.1 `watch-auto-clear.sh`: when `idle.due` and unarmed → the nudge path (same record); when armed → the clear path with every existing gate and the fire lock; log lines name `warm-idle` [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 3.2 Flags `--idle-minutes` / `--idle-floor` (0 disables), shown in the startup line [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 3.3 Watcher-level tests with fake HOME and fake tmux, each failing without the change [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
 
 ## 4. Close
 
