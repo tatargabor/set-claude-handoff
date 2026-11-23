@@ -145,6 +145,16 @@ its own handoff and request. A peer may write `.clear-request-any`; it clears on
 own fresh handoff already names that `next`. The default threshold is 400k — below the harness's own auto-compact, which the owner's settings put at a 550k window (firing near ~500k); the earlier 320k sat under a 400k window measured to fire at 366–372k
 (opus-5-5, 400k `autoCompactWindow`, 2026-11-23); a project with another window passes `--threshold`.
 
+**Warm-idle rotation**, the second trigger. The harness also compacts an IDLE session by itself
+(*idle compaction*, ≥ 200k tokens, ~54 min after the last request). That is about a third of the
+compactions measured, and no size threshold reaches them. So a session idle for `--idle-minutes`
+(default 48) at ≥ `--idle-floor` tokens (default 200000) is treated like this:
+- unarmed: it gets the `/handoff` nudge once;
+- armed by its own last act: it is cleared while its prompt cache is still warm;
+- past 54 min: nothing is typed, and `warm-idle missed` is logged once.
+
+It never presses Escape for idle. Off: `--idle-minutes 0`.
+
 **Opting a session out:** create `.no-autoclear-<session8>` in the repo's `.set/handoff/`
 (`session8` = first 8 alphanumeric characters of the session id, shown in the statusline) —
 the gate refuses to clear that session whatever else holds. Delete the file to re-arm. Ask the

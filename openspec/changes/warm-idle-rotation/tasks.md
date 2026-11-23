@@ -18,13 +18,13 @@
 
 ## 4. Close
 
-- [ ] 4.1 `npm test`; the selftests on their private socket only [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
-- [ ] 4.2 Skill text and spec updated; the rollout (template upgrade + watcher restarts) waits for the owner's OK [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 4.1 `npm test`; the selftests on their private socket only [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
+- [x] 4.2 Skill text and spec updated; the rollout (template upgrade + watcher restarts) waits for the owner's OK [REQ: an-idle-session-is-rotated-while-its-cache-is-warm]
 
 ## Acceptance Criteria (from spec scenarios)
 
-- [ ] AC-1: WHEN a 250k session is idle 48 min, unarmed, never nudged THEN `/handoff` is typed once and recorded, log names warm-idle [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: idle-large-unarmed]
-- [ ] AC-2: WHEN a 250k session idle 49 min holds a passing marker THEN `/clear` and the continue prompt are typed as on the size path [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: idle-large-armed]
-- [ ] AC-3: WHEN a 150k session is idle 50 min THEN nothing is typed, verdict names the floor [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: below-the-floor]
-- [ ] AC-4: WHEN a session idle 55 min has no armed handoff THEN no `/clear`, log says the warm window was missed [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: too-late-to-hand-off]
-- [ ] AC-5: WHEN the turn is not idle THEN the warm-idle trigger is not due [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: a-working-turn-is-never-interrupted-for-idle]
+- [x] AC-1: WHEN a 250k session is idle 48 min, unarmed, never nudged THEN `/handoff` is typed once and recorded, log names warm-idle [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: idle-large-unarmed]
+- [x] AC-2: WHEN a 250k session idle 49 min holds a passing marker THEN `/clear` and the continue prompt are typed as on the size path [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: idle-large-armed]
+- [x] AC-3: WHEN a 150k session is idle 50 min THEN nothing is typed, verdict names the floor [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: below-the-floor]
+- [x] AC-4: WHEN a session idle 55 min has no armed handoff THEN no `/clear`, log says the warm window was missed [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: too-late-to-hand-off]
+- [x] AC-5: WHEN the turn is not idle THEN the warm-idle trigger is not due [REQ: an-idle-session-is-rotated-while-its-cache-is-warm, scenario: a-working-turn-is-never-interrupted-for-idle]

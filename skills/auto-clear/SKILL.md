@@ -12,6 +12,7 @@ The cycle this arms, once running, needs no human keystrokes:
 
 ```
 1. limit (default 400k)   the gate measures each session's OWN context number
+   or warm-idle (48 min)   …or its idle time: ≥ 48 min with no request at ≥ 200k (before the runtime's idle compaction)
 2. handoff készítés       the session writes a handoff; the write-check hook arms it
 3. auto-clear             the executor types /clear when every gate holds
 4. auto-reload            the SessionStart:clear hook injects the right handoff
@@ -93,7 +94,29 @@ sessions never wrote one (2026-11-23). So when a session is idle, unarmed, not o
 of the threshold (`--nudge-ratio R` on the watcher), the watcher types `/handoff` into it **once**. The
 record `.set/handoff/.handoff-nudged-<session8>` is created before typing and is never overwritten: no
 session is nudged twice. Same presence gate as a clear; a working turn is waited out. Off:
-`--arm-nudge false`.
+`--arm-nudge false` (turns off the size nudge only; the warm-idle one below has its own switch).
+
+## Warm-idle rotation: the second trigger
+
+The runtime compacts an IDLE session by itself. This is documented as *idle compaction* (setting
+`idleCompaction`, floor `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, default 200 000). It starts ~53.8 min after
+the last request, so no size threshold can come before it. Measured 2026-11-23: about 35 % of one product
+family's auto compactions, and every one under 250k, were idle compactions.
+
+So the watcher also acts on time. A session whose turn has ended, has had no request for
+`--idle-minutes` (default 48), and holds at least `--idle-floor` tokens (default 200 000) is treated like
+this:
+
+- **Unarmed:** `/handoff` is typed once, through the same `.handoff-nudged-<session8>` record. Its
+  trigger word `warm-idle` makes the handoff that answers it clear at once.
+- **Armed by its own last act:** `/clear` is typed, with the same presence gate and fire lock as the
+  size path, and FIRE names `trigger=warm-idle`. A marker older than the last work is NOT cleared for
+  idle, because the work done since would be lost.
+- **Never with an Escape:** a pane showing a running turn logs `warm-idle waits`.
+- **Past 54 min:** nothing is typed, the size nudge included, and `warm-idle missed` is logged once.
+
+Off: `--idle-minutes 0` (or `--idle-floor 0`). A tree that sets `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`
+passes the same number as `--idle-floor`.
 
 ## Background agents: compact, not clear
 
