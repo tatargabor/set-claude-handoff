@@ -128,6 +128,21 @@ test("versions --regenerate outside a git checkout says so and exits 1 — the p
   assert.ok(!existsSync(join(empty, "shipped-hashes.json")), "no history read, no manifest written")
 })
 
+test("the git probe is silent in a package dir without git — execFileSync forwards the child's stderr, so 'fatal: not a git repository' printed before the curated message and the failure read as a git crash instead of the package's own answer", () => {
+  const pkg = mkdtempSync(join(tmpdir(), "versions-probe-"))
+  // The published package: bin/ + package.json, no .git anywhere above it.
+  cpSync(join(PKG_ROOT, "bin"), join(pkg, "bin"), { recursive: true })
+  cpSync(join(PKG_ROOT, "package.json"), join(pkg, "package.json"))
+  let stderr = ""
+  try {
+    execFileSync(process.execPath, [join(pkg, "bin/cli.mjs"), "versions", "--regenerate"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+  } catch (e) {
+    stderr = String(e.stderr)
+  }
+  assert.match(stderr, /git checkout/, "the curated message must be the answer")
+  assert.ok(!stderr.includes("fatal:"), `git's raw stderr leaked past the probe: ${stderr}`)
+})
+
 test("a corrupt shipped-hashes.json announces the file and the remedy on stderr and exits 1 — an uncaught JSON.parse stack trace names neither and reads as a package bug instead of bad data", () => {
   const pkg = mkdtempSync(join(tmpdir(), "versions-corrupt-"))
   writeFileSync(join(pkg, "shipped-hashes.json"), "{ this is not json")

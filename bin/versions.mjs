@@ -28,7 +28,10 @@ function runGit(pkgRoot, args) {
 /** Is this package root a git checkout (the only place history can be read)? */
 function inGitCheckout(pkgRoot) {
   try {
-    runGit(pkgRoot, ["rev-parse", "--is-inside-work-tree"])
+    // stdio "ignore" on all three: execFileSync forwards the child's stderr by default, so
+    // git's "fatal: not a git repository" would print BEFORE the curated message below and
+    // the failure would read as a git crash instead of the package's own answer.
+    execFileSync("git", ["-C", pkgRoot, "rev-parse", "--is-inside-work-tree"], { stdio: "ignore" })
     return true
   } catch {
     return false
