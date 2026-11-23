@@ -58,7 +58,7 @@
 #   watch-auto-clear.sh --dir <projectRoot> [--interval SEC] [--threshold N] [--freshness SEC]
 #     [--background-work-blocks true|false] [--started-after ISO] [--gate PATH] [--dry-run]
 #     [--auto-continue PROMPT] [--continue-delay SEC] [--autopilot]
-#     [--compact-on-background true|false] [--compact-threshold N]
+#     [--compact-on-background true|false] [--compact-threshold N] [--log-max-kb KB]
 #
 #   --background-work-blocks   default false since 2026-11-23: background tasks and subagents survive
 #                 /clear on 2.1.330 (docs/investigations/2026-11-23-background-survival-rerun.md).
@@ -85,6 +85,12 @@
 #                 survive; the session's marker is removed after it, so the next one needs a fresh
 #                 handoff. Never presses Escape for a compact: a working turn is waited out.
 #
+#   --log-max-kb KB   size rotation, the safety net under the "no" dedupe: at watcher start and at
+#                 the top of every pass, a log past KB kilobytes (default 5120) is renamed to
+#                 auto-clear.log.1 — any old .1 replaced — and the fresh file's first line names
+#                 the rotation and the size. Measured 2026-11-23: one consumer log had grown to
+#                 47 MB / 236 385 lines.
+#
 #   --auto-continue default   use the package's own continue prompt (DEFAULT_CONTINUE below).
 #
 #   --autopilot   every automatic continuation first runs .claude/hooks/autopilot/drift-guard.mjs
@@ -97,7 +103,7 @@ set -u
 
 ARM_NUDGE="true"; NUDGE_RATIO=""; IDLE_MINUTES=""; IDLE_FLOOR=""
 WARM_MISSED=" "   # sessions whose missed warm window was logged (a string set: macOS bash 3.2 has no -A)
-DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0
+DIR=""; INTERVAL=60; THRESHOLD=""; FRESHNESS=""; BG="false"; AFTER=""; GATE=""; DRY=0; LOG_MAX_KB=""
 CONTINUE_PROMPT=""; CONTINUE_DELAY=20; AUTOPILOT=0; COMPACT_BG="false"; COMPACT_THRESHOLD=""
 COMPACT_CONTINUE="Continue after an automatic /compact (compact-on-background): your background agents are still running and will notify you. Re-read your own handoff file in full, then continue its CURRENT next step - a later UPDATE section supersedes earlier next steps, and a step marked done is never redone. Write a fresh handoff before the context fills again."
 DEFAULT_CONTINUE="Autopilot continue after an automatic /clear (auto-continue): read the reloaded handoff file in full - it is THIS session's own thread. Continue with its CURRENT next step - a later UPDATE section supersedes the original next-steps list, and a step marked done is never redone. A project-level goal or plan file is context, not a work queue: never take over a step or lane another session owns. Stop and wait only at a decision that the thread's recorded human direction does not already answer - ask it on its own line starting with NEED INPUT: so the keep-going hook lets the stop through."
@@ -119,6 +125,7 @@ while [ $# -gt 0 ]; do
     --nudge-ratio) NUDGE_RATIO="$2"; shift 2;;
     --idle-minutes) IDLE_MINUTES="$2"; shift 2;;
     --idle-floor) IDLE_FLOOR="$2"; shift 2;;
+    --log-max-kb) LOG_MAX_KB="$2"; shift 2;;
     --dry-run) DRY=1; shift;;
     *) echo "unknown flag: $1" >&2; exit 2;;
   esac
@@ -190,6 +197,26 @@ no_log_due() { # $1 = sid, $2 = shape
   log "warn  no-dedupe: cannot write $f — the verdict line repeats until this works"
   return 0
 }
+
+# Size rotation — the safety net under the dedupe above (same measurement: one consumer log
+# reached 47 MB / 236 385 lines). At watcher start and at the top of every pass: past
+# --log-max-kb, auto-clear.log becomes .1 (any old .1 replaced) and the fresh file's first line
+# names the rotation and the size. `wc -c <` is the portable size check.
+LOG_MAX_KB="${LOG_MAX_KB:-5120}"
+case "$LOG_MAX_KB" in ''|*[!0-9]*) echo "--log-max-kb must be an integer (KB), got: $LOG_MAX_KB" >&2; exit 2;; esac
+log_rotate() {
+  local bytes
+  [ -f "$LOG" ] || return 0
+  bytes=$(wc -c < "$LOG" 2>/dev/null) || return 0
+  bytes=$((bytes))   # BSD wc pads with spaces; arithmetic strips them
+  [ "$bytes" -gt $((LOG_MAX_KB * 1024)) ] || return 0
+  if mv -f "$LOG" "$LOG.1" 2>/dev/null; then
+    log "rotate  auto-clear.log reached ${bytes} bytes (> ${LOG_MAX_KB} KB) — the previous content is in auto-clear.log.1"
+  else
+    log "warn  rotate failed — auto-clear.log stays above ${LOG_MAX_KB} KB"
+  fi
+}
+log_rotate
 
 if ! command -v tmux >/dev/null; then
   if python3 -c "import set_orch.fleet.owner_client" >/dev/null 2>&1; then
@@ -619,6 +646,7 @@ heartbeat() {
 }
 
 while :; do
+  log_rotate
   heartbeat
   for rec in "$HOME"/.claude/sessions/*.json; do
     [ -f "$rec" ] || continue

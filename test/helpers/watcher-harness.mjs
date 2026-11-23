@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null }) {
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
   const hd = join(proj, ".set/handoff")
@@ -46,6 +46,9 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
     if (at) utimesSync(m, at, at)
   }
   const keys = join(base, "keys.log")
+  const logPath = join(hd, "auto-clear.log")
+  if (prefillLogBytes > 0) writeFileSync(logPath, "x".repeat(prefillLogBytes))
+  if (staleLog1) writeFileSync(`${logPath}.1`, "stale\n")
   writeFileSync(join(bin, "tmux"), `#!/usr/bin/env bash
 case "$1" in
   list-panes) printf '%s\\tfake:0.0\\n' ${PID} ;;
@@ -69,7 +72,8 @@ exit 0
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
   return {
     keys: existsSync(keys) ? readFileSync(keys, "utf8").trim().split("\n").filter(Boolean) : [],
-    log, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
+    log, log1: existsSync(`${logPath}.1`) ? readFileSync(`${logPath}.1`, "utf8") : null,
+    base, record, recordBody: existsSync(record) ? readFileSync(record, "utf8") : null,
     record2: existsSync(record + ".2") ? readFileSync(record + ".2", "utf8") : null,
   }
 }
