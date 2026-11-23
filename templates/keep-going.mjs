@@ -214,10 +214,13 @@ async function main(argv) {
 
   if (mode !== "stop") return 0
   const message = ev.last_assistant_message ?? lastAssistantText(c.lines)
+  // An excluded session never gets a clear: the watcher skips it by the start filter, so "the
+  // handoff is armed — waiting for the auto-clear" would wait for ever. The exclusion acts like
+  // no watcher here (the post hook already early-returns on it).
   const d = decideStop({
     message, backgroundTasks: Array.isArray(ev.background_tasks) ? ev.background_tasks : [],
     tokens: c.tokens, markerAgeMs: c.markerAgeMs, markerFresh: c.markerFresh, killed: c.killed, human: lastHumanPrompt(c.lines),
-    state: readState(c.statePath), opts, autoClear: c.autoClear,
+    state: readState(c.statePath), opts, autoClear: !c.excluded && c.autoClear,
   })
   if (d.block) {
     // The budget lives in the state file. If it cannot be written, every Stop starts at 1/40 again,
