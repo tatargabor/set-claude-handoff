@@ -128,6 +128,36 @@ test("versions --regenerate outside a git checkout says so and exits 1 — the p
   assert.ok(!existsSync(join(empty, "shipped-hashes.json")), "no history read, no manifest written")
 })
 
+test("a corrupt shipped-hashes.json announces the file and the remedy on stderr and exits 1 — an uncaught JSON.parse stack trace names neither and reads as a package bug instead of bad data", () => {
+  const pkg = mkdtempSync(join(tmpdir(), "versions-corrupt-"))
+  writeFileSync(join(pkg, "shipped-hashes.json"), "{ this is not json")
+  const errs = []
+  assert.equal(cmdVersions(pkg, ["--json"], { log: silent, err: (m) => errs.push(m) }), 1)
+  const text = errs.join("\n")
+  assert.match(text, /shipped-hashes\.json/)
+  assert.match(text, /--regenerate/, "a git checkout must be told the regeneration remedy")
+  assert.match(text, /reinstall/, "an installed package must be told the reinstall remedy")
+})
+
+test("regenerating in a checkout where an installed file has no history announces the file and the remedy on stderr and exits 1 — the shippedHashesOf throw used to escape cmdVersions as an uncaught stack trace", () => {
+  const repo = mkdtempSync(join(tmpdir(), "versions-nohistory-"))
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" })
+  git("init", "-q")
+  git("config", "user.email", "t@example.com")
+  git("config", "user.name", "t")
+  // One seed commit, so `git log` itself succeeds and the empty result really is "this file has
+  // no history" — the path shippedHashesOf must report, not a git error.
+  writeFileSync(join(repo, "README.md"), "seed\n")
+  git("add", "-A")
+  git("commit", "-q", "-m", "seed")
+  const errs = []
+  assert.equal(cmdVersions(repo, ["--regenerate"], { log: silent, err: (m) => errs.push(m) }), 1)
+  const text = errs.join("\n")
+  assert.match(text, /has no git history/)
+  assert.match(text, /commit it first, then regenerate/)
+  assert.ok(!existsSync(join(repo, "shipped-hashes.json")), "no manifest written from a failed history read")
+})
+
 test("`versions --json` prints the promised shape — {package, version, files}, files equal to the manifest computed from git history", () => {
   const out = execFileSync(process.execPath, [join(PKG_ROOT, "bin/cli.mjs"), "versions", "--json"], { encoding: "utf8" })
   const m = JSON.parse(out)

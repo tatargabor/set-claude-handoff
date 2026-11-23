@@ -35,6 +35,20 @@ function inGitCheckout(pkgRoot) {
   }
 }
 
+/**
+ * History → manifest, with the shippedHashesOf throw surfaced as one stderr line. Its message
+ * names the file and the remedy; let it escape and the caller gets a stack trace that names
+ * neither and reads as a package bug instead of a data or state problem.
+ */
+function manifestFromGit(pkgRoot, err) {
+  try {
+    return shippedFilesFromGit({ pkgRoot })
+  } catch (e) {
+    err(String(e?.message ?? e))
+    return null
+  }
+}
+
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex")
 
 /**
@@ -91,7 +105,8 @@ export function cmdVersions(pkgRoot, rest, { log = console.log, err = console.er
       err(`versions --regenerate reads git history and needs a git checkout — the published package ships ${MANIFEST_FILE} already`)
       return 1
     }
-    const files = shippedFilesFromGit({ pkgRoot })
+    const files = manifestFromGit(pkgRoot, err)
+    if (!files) return 1
     writeFileSync(join(pkgRoot, MANIFEST_FILE), JSON.stringify(files, null, 2) + "\n")
     const count = Object.values(files).reduce((a, h) => a + h.length, 0)
     log(`wrote ${MANIFEST_FILE} — ${Object.keys(files).length} installed files, ${count} shipped versions`)
@@ -103,7 +118,8 @@ export function cmdVersions(pkgRoot, rest, { log = console.log, err = console.er
       // A git checkout has no committed JSON to serve (shipped-hashes.json is generated, not
       // committed): compute the manifest live, exactly as --regenerate does, but write nothing —
       // serving a stored copy would freeze the list at whatever the last regeneration produced.
-      files = shippedFilesFromGit({ pkgRoot })
+      files = manifestFromGit(pkgRoot, err)
+      if (!files) return 1
     } else {
       const file = join(pkgRoot, MANIFEST_FILE)
       // Absence is announced, never silent: an empty stdout would read as "zero shipped
@@ -112,7 +128,12 @@ export function cmdVersions(pkgRoot, rest, { log = console.log, err = console.er
         err(`versions: ${MANIFEST_FILE} is missing at ${file} — regenerate it in a git checkout: node bin/cli.mjs versions --regenerate`)
         return 1
       }
-      files = JSON.parse(readFileSync(file, "utf8"))
+      try {
+        files = JSON.parse(readFileSync(file, "utf8"))
+      } catch {
+        err(`versions: ${MANIFEST_FILE} at ${file} is not readable JSON — in a git checkout run: node bin/cli.mjs versions --regenerate; in an installed package: reinstall`)
+        return 1
+      }
     }
     if (json) {
       const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8"))
