@@ -83,3 +83,8 @@ for i in $(seq 1 20); do printf '{"type":"assistant","timestamp":"2026-11-24T10:
   assert.match(r.log, /payback  0ldsess1  after 20 requests of \S+: context 300000 → avg \d+, saved ≈ \d+ vs handoff cost ≈ 650000 → net -?\d+ input-token equivalents/, r.log)
   assert.ok(!existsSync(join(r.base, "proj/.set/handoff/.cost-0ldsess1")), "the record is removed once priced")
 })
+
+test("a watcher whose gate dir lacks handoff-cost.mjs says so once at startup — absence is announced, never silent", () => {
+  const r = runWatcher({ tokens: 100_000, seconds: 2, gateDirWithoutCost: true })
+  assert.match(r.log, /note  handoff-cost\.mjs not installed next to the gate — no cost\/payback lines/, r.log)
+})

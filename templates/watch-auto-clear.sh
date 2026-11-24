@@ -294,6 +294,7 @@ if [ "$FLEET_OK" != "1" ]; then
   log "warn  fleet: the owner client is not importable by $(command -v python3) (${FLEET_ERR:-unknown error}) — sessions hosted by the fleet can never be nudged or cleared, only tmux panes can; put set-core's lib on PYTHONPATH in this watcher's environment"
 fi
 [ -f "$LEDGER" ] || log "note  autopilot ledger not installed — typed text is not provenance-logged"
+[ -f "$COST" ] || log "note  handoff-cost.mjs not installed next to the gate — no cost/payback lines; re-run init --auto-clear"
 
 # Every worktree of DIR is a legitimate session cwd — and each tree gates from ITS OWN
 # .set/handoff (9.1). The main tree is first; worktree enumeration failing (plain dir, no

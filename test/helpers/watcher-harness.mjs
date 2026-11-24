@@ -3,9 +3,9 @@
 // that is given. A fake `tmux` on PATH hosts the session pid, renders `screen` (an empty idle prompt by
 // default), and appends every send-keys call to keys.log. The watcher then runs for a few one-second
 // passes. Shared by the watcher-level tests, so a new trigger reuses the harness instead of copying it.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync, symlinkSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync, symlinkSync, copyFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false, noPane = false, noFleetClient = false, fleetViaBin = false,
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false, noPane = false, noFleetClient = false, fleetViaBin = false, gateDirWithoutCost = false,
   startedAtMin = 120, wiredAtMin = null, wiredStamp = null, excluded = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
@@ -102,7 +102,15 @@ exec ${real} "$@"
   }
   // termWatcherOnly: `timeout --foreground` signals the watcher's bash ALONE, not its children —
   // the shape of a plain `kill <pid>`, which a group-wide TERM (the default) cannot reproduce.
-  const run = spawnSync("timeout", [...(termWatcherOnly ? ["--foreground"] : []), String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", GATE, ...extraArgs], {
+  // gateDirWithoutCost: the gate and its two required neighbours copied alone, without handoff-cost.mjs.
+  let gate = GATE
+  if (gateDirWithoutCost) {
+    const gd = join(base, "gate")
+    mkdirSync(gd)
+    for (const f of ["clear-gate.mjs", "presence.mjs", "turn-state.mjs"]) copyFileSync(join(dirname(GATE), f), join(gd, f))
+    gate = join(gd, "clear-gate.mjs")
+  }
+  const run = spawnSync("timeout", [...(termWatcherOnly ? ["--foreground"] : []), String(seconds), "bash", WATCHER, "--dir", proj, "--interval", "1", "--gate", gate, ...extraArgs], {
     env: { ...process.env, HOME: home, TMPDIR: roTmp ?? base, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8",
   })
   const log = existsSync(join(hd, "auto-clear.log")) ? readFileSync(join(hd, "auto-clear.log"), "utf8") : ""
