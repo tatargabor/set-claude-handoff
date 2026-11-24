@@ -155,3 +155,13 @@ test("a project that wires the PACKAGE line in its own settings makes the plugin
   put('set-claude-handoff hook reinject')
   assert.equal(sh(line("reinject"), m.env, { session_id: "ffff1111-x", source: "clear", cwd: m.proj }).stdout, "", "the plugin line says nothing")
 })
+
+test("the /auto-clear skill's status step recognises the package route — reported 2026-11-24 by a consumer wired through a plugin: the copy-only checks (`test -f .claude/hooks/clear-gate.mjs`, a settings grep) said gate-missing and not wired although the setup worked", () => {
+  const skill = readFileSync(join(fileURLToPath(new URL("..", import.meta.url)), "skills/auto-clear/SKILL.md"), "utf8")
+  const status = skill.slice(skill.indexOf("## 1. STATE first"), skill.indexOf("## 2. ARM"))
+  assert.match(status, /hook reinject --from-plugin/, "the plugin's wiring line is looked for")
+  assert.match(status, /set-claude-handoff watch/, "a package-run watcher is named")
+  assert.match(status, /\.watcher-alive/, "the heartbeat is evidence")
+  assert.match(status, /"Not wired" is the\s+verdict only when neither route shows the reload hook/, "no-copy alone is not a verdict")
+  assert.doesNotMatch(status, /echo gate-missing/, "the copy-only verdict word is gone")
+})
