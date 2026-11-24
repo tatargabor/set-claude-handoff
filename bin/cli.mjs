@@ -57,6 +57,7 @@ init writes:
   .claude/hooks/watch-auto-clear.sh         the executor (run it under tmux / systemd)
   .claude/hooks/presence.mjs                the executor's is-a-human-typing check
   .claude/hooks/turn-state.mjs              the executor's is-a-turn-running check + submit confirm
+  .claude/hooks/handoff-cost.mjs            the executor's handoff cost + payback measurement
   .claude/hooks/handoff-arm.mjs             arms a session when it writes a passing handoff (PostToolUse)
   .claude/hooks/keep-going.mjs              opt-in: never stop without a real question; handoff at the limit
 

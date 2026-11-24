@@ -20,6 +20,7 @@ export const INSTALLED_FILES = [
   { src: "templates/watch-auto-clear.sh", dst: "hooks/watch-auto-clear.sh", when: "auto-clear" },
   { src: "templates/presence.mjs", dst: "hooks/presence.mjs", when: "auto-clear" },
   { src: "templates/turn-state.mjs", dst: "hooks/turn-state.mjs", when: "auto-clear" },
+  { src: "templates/handoff-cost.mjs", dst: "hooks/handoff-cost.mjs", when: "auto-clear" },
   { src: "templates/handoff-arm.mjs", dst: "hooks/handoff-arm.mjs", when: "auto-clear" },
   { src: "templates/keep-going.mjs", dst: "hooks/keep-going.mjs", when: "auto-clear" },
   { src: "templates/autopilot/answer-dialog.mjs", dst: "hooks/autopilot/answer-dialog.mjs", when: "autopilot" },
