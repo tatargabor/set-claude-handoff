@@ -491,6 +491,13 @@ test("21:25:16Z: the CONTINUE confirm was false — 'auto-continue' in an attach
   const submitted = lines + "\n" + JSON.stringify({ type: "user", message: { role: "user", content: "Folytatás automatikus /clear után (auto-continue): olvasd be a handoff fájlt." } })
   assert.equal(transcriptSaysSubmitted(submitted, "auto-continue"), true, "probe M2: a queued message leaves NO user entry, so a user-string hit is real submission")
   assert.equal(transcriptSaysSubmitted("", "auto-continue"), false)
+  // Measured 2026-11-24: typed into a fresh session already busy with a background task's
+  // notification, the prompt was drained into that turn as a queued_command attachment. It was
+  // delivered and worked on, but only a user string counted, so the watcher logged UNCONFIRMED.
+  const enqueued = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "Autopilot continue after an automatic /clear" })
+  assert.equal(transcriptSaysSubmitted(enqueued, "Autopilot continue"), false, "an enqueue alone may still be waiting — not delivery")
+  const drained = enqueued + "\n" + JSON.stringify({ type: "attachment", attachment: { type: "queued_command", prompt: "Autopilot continue after an automatic /clear" } })
+  assert.equal(transcriptSaysSubmitted(drained, "Autopilot continue"), true, "a queued_command attachment is the prompt delivered into the running turn")
 })
 
 test("21:26:17Z: the fire lock holds a second fire while the clear is in flight, and releases when the sessionId changed", () => {
