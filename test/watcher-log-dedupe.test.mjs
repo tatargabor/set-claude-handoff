@@ -93,3 +93,9 @@ test("an unreachable session's 'no writer path' nudge line is logged ONCE over ~
   assert.equal(lines.length, 1, `the same no-writer-path line repeats:\n${r.log}`)
   assert.deepEqual(r.keys, [], "nothing can be typed without a writer path")
 })
+
+test("a watcher whose python3 cannot import the fleet owner client says so at startup and in the no-writer-path line — measured 2026-11-24: 36 of 41 units lacked set-core's lib on PYTHONPATH, the per-pass lookup swallowed the ImportError, and no fleet-hosted session was ever nudged or cleared", () => {
+  const r = runWatcher({ tokens: 410_000, seconds: 3, noPane: true, noFleetClient: true })
+  assert.match(r.log, /warn  fleet: the owner client is not importable by \S+ \(ModuleNotFoundError: No module named 'set_orch'\)/, r.log)
+  assert.match(r.log, /no writer path; the fleet owner client is NOT importable/, r.log)
+})
