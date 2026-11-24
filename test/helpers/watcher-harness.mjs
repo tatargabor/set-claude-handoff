@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false,
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false, noPane = false,
   startedAtMin = 120, wiredAtMin = null, wiredStamp = null, excluded = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
@@ -64,7 +64,7 @@ export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMi
   if (staleLog1) writeFileSync(`${logPath}.1`, "stale\n")
   writeFileSync(join(bin, "tmux"), `#!/usr/bin/env bash
 case "$1" in
-  list-panes) printf '%s\\tfake:0.0\\n' ${PID} ;;
+  list-panes) ${noPane ? ":" : `printf '%s\\tfake:0.0\\n' ${PID}`} ;;
   capture-pane) printf '${screen}' ;;
   send-keys) shift; printf '%s\\n' "$*" >> "${keys}" ;;
 esac

@@ -86,3 +86,10 @@ test("a TERM sent to the watcher alone ends it at once, not after the pass's sle
   const left = readdirSync(r.base).filter((n) => n.startsWith("set-handoff-no-dedupe-"))
   assert.deepEqual(left, [], `leftover no-dedupe dirs in ${r.base}:\n${r.log}`)
 })
+
+test("an unreachable session's 'no writer path' nudge line is logged ONCE over ~5 passes, not every pass — measured 2026-11-24: a 400k+ seat hosted by no tmux pane and no fleet agent logged it 14 times in 15 minutes", () => {
+  const r = runWatcher({ tokens: 410_000, seconds: 6, noPane: true })
+  const lines = r.log.match(/^\S+ nudge \S+ .*no writer path.*$/gm) ?? []
+  assert.equal(lines.length, 1, `the same no-writer-path line repeats:\n${r.log}`)
+  assert.deepEqual(r.keys, [], "nothing can be typed without a writer path")
+})
