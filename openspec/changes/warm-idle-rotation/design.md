@@ -50,6 +50,9 @@ and the 54-minute stop (D2) is the upper edge of that, not a margin under it.
   `--idle-floor` defaults to the documented 200 000 (D4). A tree that sets
   `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` passes the same number to the watcher. A tree with
   `idleCompaction: false` loses the compaction case but keeps the cache-write cost case of Why.
+  Added 2026-11-24: in such a tree the 54-min cut-off (D below) does not apply. The gate reads
+  `idleCompaction` from the settings scopes (`idleCompactionSetting` in clear-gate.mjs), and with
+  `false` a session idle past 54 min is still due, because nothing else will rotate it.
 - **1.3 — tokens one turn adds** (main-thread transcripts on this machine, last 7 days, 2034 files,
   7444 turns; a turn is a typed user message to the next one, and the delta is between the last usage
   triples before each, with compaction boundaries excluded):

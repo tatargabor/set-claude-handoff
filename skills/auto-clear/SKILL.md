@@ -144,7 +144,10 @@ this:
   size path, and FIRE names `trigger=warm-idle`. A marker older than the last work is NOT cleared for
   idle, because the work done since would be lost.
 - **Never with an Escape:** a pane showing a running turn logs `warm-idle waits`.
-- **Past 54 min:** nothing is typed, the size nudge included, and `warm-idle missed` is logged once.
+- **Past 54 min:** nothing is typed, the size nudge included, and `warm-idle missed` is logged once,
+  but only while the runtime's idle compaction is on. With `"idleCompaction": false` in any settings
+  scope (user < project < project-local < managed; the narrowest scope that sets it wins), nothing
+  compacts at ~54 min, so there is no upper bound: any idle time of `--idle-minutes` or more is due.
 
 Off: `--idle-minutes 0` (or `--idle-floor 0`). A tree that sets `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`
 passes the same number as `--idle-floor`.

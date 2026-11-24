@@ -1,9 +1,9 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, writeFileSync, utimesSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { evaluate, armMarker, NUDGE_PREFIX } from "../templates/clear-gate.mjs"
+import { evaluate, armMarker, NUDGE_PREFIX, idleCompactionSetting } from "../templates/clear-gate.mjs"
 
 // The bug these guard: a size threshold can never precede the runtime's IDLE compaction. Measured
 // 2026-11-23 in one product family's consumer trees, 122 of 348 auto compactions (every one of the 40
@@ -61,7 +61,9 @@ test("AC-3: a 150k session idle 50 min → nothing due, and the verdict names th
 
 test("AC-4: idle 55 min with no armed handoff → no clear and no nudge (the runtime's compaction is under way); the reason says the warm window was missed", () => {
   const s = session({ tokens: 250_000, idleMin: 55 })
-  const r = run(s)
+  // Pinned: the cut-off holds only while the runtime compacts, and this machine's own settings
+  // may say otherwise — the test must not read the developer's ~/.claude.
+  const r = run(s, { idleCompaction: true })
   assert.equal(r.idle.late, true)
   assert.match(r.idle.reason, /warm window missed/)
   assert.equal(r.eligible, false)
@@ -107,4 +109,40 @@ test("--idle-minutes 0 turns the warm-idle trigger off", () => {
   const r = run(s, { idleMinutes: 0 })
   assert.equal(r.idle.reason, "off")
   assert.equal(r.eligible, false)
+})
+
+// The runtime's idle compaction can be switched off ("idleCompaction": false — the owner did so on
+// 2026-11-24 to let the warm-idle handoff take its place). The 54-min cut-off assumed it was on, so
+// a session that slipped past the 48–54 window was dropped to the 400k size path for nothing.
+function tree({ user, project, local } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "warm-idle-tree-"))
+  const home = join(root, "home"), proj = join(root, "proj")
+  for (const d of [join(home, ".claude"), join(proj, ".claude"), join(proj, ".set/handoff")]) mkdirSync(d, { recursive: true })
+  if (user !== undefined) writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ idleCompaction: user }))
+  if (project !== undefined) writeFileSync(join(proj, ".claude/settings.json"), JSON.stringify({ idleCompaction: project }))
+  if (local !== undefined) writeFileSync(join(proj, ".claude/settings.local.json"), JSON.stringify({ idleCompaction: local }))
+  return { home, proj, dir: join(proj, ".set/handoff") }
+}
+
+test("idleCompactionSetting: unset is the runtime default (on); the narrower scope wins — user < project < project-local", () => {
+  assert.equal(idleCompactionSetting(tree()).on, true)
+  const t1 = tree({ user: false })
+  assert.equal(idleCompactionSetting({ projectDir: t1.proj, home: t1.home }).on, false)
+  const t2 = tree({ user: false, project: true })
+  assert.equal(idleCompactionSetting({ projectDir: t2.proj, home: t2.home }).on, true)
+  const t3 = tree({ user: true, project: true, local: false })
+  const r3 = idleCompactionSetting({ projectDir: t3.proj, home: t3.home })
+  assert.equal(r3.on, false)
+  assert.match(r3.source, /settings\.local\.json$/, "the verdict can name the scope that decided")
+})
+
+test("with idleCompaction false in the user settings, an unarmed 250k session idle 70 min is still due for warm-idle (nudged, not 'window missed') — the 54-min cut-off assumed a runtime compaction that is switched off", () => {
+  const t = tree({ user: false })
+  const tr = join(t.dir, "t.jsonl")
+  writeFileSync(tr, JSON.stringify({ type: "assistant", timestamp: new Date(Date.now() - 70 * MIN).toISOString(),
+    message: { content: [{ type: "text", text: "done" }], usage: { input_tokens: 250_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }) + "\n")
+  const r = evaluate({ dir: t.dir, sessionId: SID, transcriptPath: tr, home: t.home })
+  assert.equal(r.idle.late, false, r.idle.reason)
+  assert.equal(r.idle.due, true, r.idle.reason)
+  assert.equal(r.nudge.due, true, "an unarmed due session is asked for its handoff")
 })
