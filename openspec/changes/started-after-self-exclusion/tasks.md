@@ -34,3 +34,8 @@
 - [x] AC-2: WHEN a watcher restarts in a tree wired earlier THEN a session started after the wiring is watched [REQ: a-session-excluded-by-the-start-filter-is-told-once, scenario: a-watcher-restart-in-a-tree-already-wired]
 - [x] AC-3: WHEN an excluded session is resumed THEN it is gated and its own marker arms it [REQ: a-session-excluded-by-the-start-filter-is-told-once, scenario: a-resumed-session-is-included]
   — proven at the watcher level (a new runtime record postdating the stamp, its own earlier marker arming the clear); the live `claude --resume` probe itself stays open under 1.1.
+
+## 5. Follow-up — the filter goes opt-in (owner decision 2026-11-24, after the task 1.1 control)
+
+- [x] 5.1 Watcher: no start filter without `--started-after`; `--started-after wired` opts into the wiring stamp; with the filter off a stale `.excluded-<session8>` is removed and logged as `no start filter` [REQ: a-session-excluded-by-the-start-filter-is-told-once]
+- [x] 5.2 Skill and tests follow: the stamp tests pass `--started-after wired`, a new test proves a stamp alone no longer filters [REQ: a-session-excluded-by-the-start-filter-is-told-once]

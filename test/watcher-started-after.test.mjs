@@ -17,7 +17,7 @@ const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 test("AC-1: the first start-filter skip writes ONE .excluded-<session8> (resume command + reason), logs the skip ONCE, and types nothing into the session", () => {
   // The arming session predates the watcher: fresh wiring stamp (init just ran), session started
   // 120 min ago — excluded by the DEFAULT filter, announced, never typed into.
-  const r = runWatcher({ tokens: 410_000, wiredAtMin: 0, seconds: 4 })
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 410_000, wiredAtMin: 0, seconds: 4 })
   assert.ok(r.excludedBody?.includes(`claude --resume ${SID}`), `the way out is named:\n${r.excludedBody}`)
   assert.match(r.excludedBody ?? "", /before --started-after/, "the reason is in the record")
   assert.equal((r.log.match(/^\S+ skip .+started before --started-after/gm) ?? []).length, 1,
@@ -26,9 +26,9 @@ test("AC-1: the first start-filter skip writes ONE .excluded-<session8> (resume 
 })
 
 test("AC-2: a watcher restart in a tree already wired — a session started AFTER the wiring stamp is watched, not skipped", () => {
-  const r = runWatcher({ tokens: 410_000, startedAtMin: 60, wiredAtMin: 120, seconds: 5 })
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 410_000, startedAtMin: 60, wiredAtMin: 120, seconds: 5 })
   assert.equal(r.excluded, null, `no exclusion record:\n${r.log}`)
-  assert.match(r.log, /watcher started .* started-after=wired \S+ \(default\)/, "the default filter announces its moment")
+  assert.match(r.log, /watcher started .* started-after=wired \d{4}-\S+Z /, "the opted-in stamp filter announces its moment")
   assert.deepEqual(r.keys, ["-t fake:0.0 -l /handoff", "-t fake:0.0 Enter"], `gated like any session:\n${r.log}`)
 })
 
@@ -42,7 +42,7 @@ test("an explicit --started-after overrides the wiring stamp — a session start
 test("AC-3: a resumed session — a new runtime record for the same id, started after the wiring — is gated like any other and its own earlier marker arms the /clear", () => {
   // The marker predates the new process start on purpose: the gate announces a restored process of
   // the SAME session id and still accepts its own thread's marker.
-  const r = runWatcher({ tokens: 250_000, idleMin: 49, marker: true, startedAtMin: 5, wiredAtMin: 120, seconds: 4 })
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 250_000, idleMin: 49, marker: true, startedAtMin: 5, wiredAtMin: 120, seconds: 4 })
   assert.equal(r.excluded, null, `not excluded:\n${r.log}`)
   assert.match(r.log, /watcher started .* started-after=wired /, "the default filter is ON — the resumed session passes it")
   assert.deepEqual(r.keys.slice(0, 2), ["-t fake:0.0 -l /clear", "-t fake:0.0 Enter"], r.log)
@@ -50,7 +50,7 @@ test("AC-3: a resumed session — a new runtime record for the same id, started 
 })
 
 test("a session that PASSES the filter loses its stale .excluded-<session8> — the resume keeps the session id but starts a new process whose startedAt postdates the stamp, and an unremoved record kept keep-going's post on the exclusion branch for ever, so the resumed session never heard the threshold warning again", () => {
-  const r = runWatcher({ tokens: 410_000, startedAtMin: 5, wiredAtMin: 120, seconds: 4,
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 410_000, startedAtMin: 5, wiredAtMin: 120, seconds: 4,
     excluded: "2026-11-23T20:15:00Z claude --resume feedface-1111-2222-3333-444455556666\nExcluded by the start filter: started before --started-after.\n" })
   assert.equal(r.excluded, null, `the stale record is removed:\n${r.log}`)
   assert.equal((r.log.match(/included  \S+  started after the filter — \.excluded-\S+ removed/gm) ?? []).length, 1,
@@ -60,7 +60,7 @@ test("a session that PASSES the filter loses its stale .excluded-<session8> — 
 })
 
 test("a 0-byte .excluded-<session8> is rewritten with the resume command + reason and logged once — the disk-full leftover (`>` created the file, ENOSPC ate the write) was honoured by the existence guard for ever: the session excluded with no resume command, no reason, and no way to repair", () => {
-  const r = runWatcher({ tokens: 410_000, wiredAtMin: 0, seconds: 4, excluded: "" })
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 410_000, wiredAtMin: 0, seconds: 4, excluded: "" })
   assert.ok(r.excludedBody?.includes(`claude --resume ${SID}`), `rewritten with the way out:\n${JSON.stringify(r.excludedBody)}`)
   assert.match(r.excludedBody ?? "", /before --started-after/, "the reason is in the record")
   assert.equal((r.log.match(/\.excluded-\S+ written \(resume \+ reason\), logged once/gm) ?? []).length, 1,
@@ -68,10 +68,20 @@ test("a 0-byte .excluded-<session8> is rewritten with the resume command + reaso
 })
 
 test("a corrupt wiring stamp refuses to start — a silently OFF filter is how a session that cannot reload gets cleared", () => {
-  const r = runWatcher({ tokens: 410_000, wiredStamp: "not a date\n", seconds: 2 })
+  const r = runWatcher({ extraArgs: ["--started-after", "wired"], tokens: 410_000, wiredStamp: "not a date\n", seconds: 2 })
   assert.deepEqual(r.keys, [], r.log)
   assert.doesNotMatch(r.log, /watcher started/, "no pass ever ran")
   assert.match(r.stderr, /wiring stamp is not a parseable date/)
+})
+
+test("a wiring stamp WITHOUT --started-after no longer filters — measured 2026-11-24 on 2.1.331 (task 1.1): a running session picks up a reload hook added mid-run, so the default filter only excluded sessions that could reload; a stale record from the filtered era is removed", () => {
+  const r = runWatcher({ tokens: 410_000, startedAtMin: 120, wiredAtMin: 0, seconds: 4,
+    excluded: "2026-11-23T20:15:00Z claude --resume feedface-1111-2222-3333-444455556666\nExcluded by the start filter: started before --started-after.\n" })
+  assert.match(r.log, /watcher started .* started-after=any/, r.log)
+  assert.doesNotMatch(r.log, /skip  \S+  started before/, `an old session is not skipped:\n${r.log}`)
+  assert.equal(r.excluded, null, `the stale record is removed:\n${r.log}`)
+  assert.match(r.log, /included  \S+  no start filter — \.excluded-\S+ removed/, r.log)
+  assert.deepEqual(r.keys.slice(0, 2), ["-t fake:0.0 -l /handoff", "-t fake:0.0 Enter"], r.log)
 })
 
 test("no stamp and no --started-after: no default filter — the old session is watched exactly as before the change", () => {

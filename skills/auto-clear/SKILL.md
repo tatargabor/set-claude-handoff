@@ -77,16 +77,16 @@ it you use the defaults and SAY so.
       --background-work-blocks <from profile, default false> \
       --auto-continue '<from profile, or: default>'"
    ```
-   No `--started-after` here: the filter then defaults to the tree's recorded wiring time
-   (`.set/handoff/.reload-wired-at` — ONE ISO-8601 UTC-with-Z line, never rewritten), so a
-   watcher restart does not exclude sessions that already had the hook. `init --auto-clear`
-   writes it only when a `.claude/settings*.json` already wires the reload hook, and its value
-   is that file's mtime — at or after the real wiring edit, so it errs late (safe). Where no
-   settings file wires it yet, init writes NOTHING and says so (`not yet …`): merge the hook
-   first, then re-run `init --auto-clear` (or write the stamp by hand:
-   `date -u +%Y-%m-%dT%H:%M:%SZ > .set/handoff/.reload-wired-at`). Pass `--started-after <iso>`
-   explicitly only when no stamp exists — and then every session started before that moment is
-   excluded, this arming session included.
+   No `--started-after` here: the start filter is OFF by default (since 2026-11-24). Measured on
+   Claude Code 2.1.331 (task 1.1 of started-after-self-exclusion): a running session picks up a
+   reload hook added to project settings mid-run, and its `/clear` reloads, so a session that
+   started before the wiring can still reload. On an older runtime that snapshots hooks at
+   start, opt in: `--started-after wired` uses the tree's recorded wiring time
+   (`.set/handoff/.reload-wired-at`, one ISO-8601 UTC-with-Z line, never rewritten), and
+   `--started-after <iso>` uses an explicit moment. In both cases every session started before
+   that moment is excluded, this arming session included. `init --auto-clear` writes the stamp
+   only when a `.claude/settings*.json` already wires the reload hook, with that file's mtime as
+   its value. Otherwise it writes nothing and says so (`not yet …`).
    For reboot survival, install a `systemd --user` unit running the same
    command with `Restart=on-failure` and say you did.
 4. **VERIFY** — an armed state without evidence is not armed:
@@ -94,7 +94,7 @@ it you use the defaults and SAY so.
    run the gate once by hand (`node .claude/hooks/clear-gate.mjs --session <any live id> …
    --json`) and show the 5-gate verdict. Report: threshold, which writer paths exist
    (tmux / fleet owner), auto-continue on/off, both switch states.
-   Then say whether THIS session is covered: `test -f .set/handoff/.excluded-<session8>` (the id8
+   Only with a start filter on: say whether THIS session is covered: `test -f .set/handoff/.excluded-<session8>` (the id8
    from the statusline or the newest `~/.claude/sessions/<pid>.json`). Present ⇒ this session
    started before the filter: name it in this turn and give the resume command from the file's
    line 1 (`claude --resume <id>` — same session id, new process, current hooks), then let the
