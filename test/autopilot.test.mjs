@@ -355,6 +355,14 @@ test("a scrollback prompt or a dialog cursor is not the input line — no input 
   assert.equal(safeToType("unknown"), false)
 })
 
+test("a freshly cleared fleet seat's empty row painted with a charset select and SI reads EMPTY, not typed — measured 2026-11-24: that paint held the auto-continue as 'a human is at the keyboard' and the cleared session sat idle", () => {
+  // Verbatim from the seat's ownerd tail, the last input-row paint 21 s after the /clear.
+  const row = "\x1b[6;1H\x1b[6;3H\x1b[?25h\x1b(B\x0f\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?25l\x1b[H"
+  assert.equal(classifyStream("\r\x1b[39m❯\xa0" + row), "empty")
+  assert.equal(classifyStream("\r\x1b[39m❯\xa0\x1b]0;✳ Claude Code\x07\x1b(B"), "empty", "an OSC title paints nothing either")
+  assert.equal(classifyStream("\r\x1b[39m❯\xa0\x1b(B\x0fdeploy it\r"), "typed", "real text after the same escapes is still typed")
+})
+
 test("fleet owner path: the raw tail stream is classified by its last input-row paint (shapes from live ownerd tails)", () => {
   assert.equal(classifyStream("\r\x1b[1B\x1b[39m❯\xa0\r\x1b[1B\x1b[38;5;244m────"), "empty")
   assert.equal(classifyStream("\r\x1b[1B\x1b[39m❯\xa0\x1b[2mmeasure the 375px bar while the loop runs\r\x1b[1B\x1b[22m"), "ghost")
