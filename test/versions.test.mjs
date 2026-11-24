@@ -216,8 +216,11 @@ test("the doctor view separates an unedited copy from a local edit — the promi
   // A package dir without git reads the JSON — generate it here exactly as --regenerate writes
   // it, so the test never depends on this checkout's own (uncommitted) copy.
   writeFileSync(join(pkg, "shipped-hashes.json"), JSON.stringify(liveManifest(), null, 2) + "\n")
-  cpSync(join(PKG_ROOT, "skills"), join(pkg, "skills"), { recursive: true })
-  cpSync(join(PKG_ROOT, "templates"), join(pkg, "templates"), { recursive: true })
+  // The package files are HEAD's, not the working tree's: the manifest is built from history, so a
+  // working-tree copy made this test red during every uncommitted template or skill edit (seen
+  // 2026-11-24, four times in one session) although nothing was wrong.
+  const tar = execFileSync("git", ["-C", PKG_ROOT, "archive", "HEAD", "skills", "templates"], { maxBuffer: 64 * 1024 * 1024 })
+  execFileSync("tar", ["-x", "-C", pkg], { input: tar })
 
   const clean = []
   assert.equal(cmdVersions(pkg, [], { log: (m) => clean.push(m), err: silent }), 0)
