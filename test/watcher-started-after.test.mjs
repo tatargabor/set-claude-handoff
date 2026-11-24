@@ -86,7 +86,8 @@ test("the /auto-clear skill names the promised interface — the wiring-stamp de
   assert.match(skill, /\.reload-wired-at/, "the wiring stamp is named")
   assert.match(skill, /\.excluded-<session8>/, "the exclusion record is named")
   assert.match(skill, /claude --resume <id>/, "the way out is named")
-  assert.match(skill, /not measured yet — task 1\.1 of started-after-self-exclusion/,
-    "the unmeasured resume path is said to be unmeasured where the skill recommends the resume")
+  assert.match(skill, /The resume path is measured \(task 1\.1 of started-after-self-exclusion/,
+    "where the skill recommends the resume, it names the measurement that backs it")
+  assert.doesNotMatch(skill, /not measured yet — task 1\.1/, "the old caveat is gone once 1.1 is measured")
   assert.doesNotMatch(skill, /--started-after \$\(date/, "the old advice is gone from the watcher command")
 })

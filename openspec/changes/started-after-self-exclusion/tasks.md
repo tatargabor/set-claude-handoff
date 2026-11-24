@@ -1,7 +1,15 @@
 ## 1. Measure
 
-- [ ] 1.1 Confirm the resume path: a `claude --resume <id>` of an excluded session gets a new runtime record (startedAt after the filter), loads the current hooks, and reloads its handoff after a `/clear` (probe on a private tmux socket) [REQ: a-session-excluded-by-the-start-filter-is-told-once]
-  — not measured — needs a live probe
+- [x] 1.1 Confirm the resume path: a `claude --resume <id>` of an excluded session gets a new runtime record (startedAt after the filter), loads the current hooks, and reloads its handoff after a `/clear` (probe on a private tmux socket) [REQ: a-session-excluded-by-the-start-filter-is-told-once]
+  — measured 2026-11-24 on Claude Code 2.1.331 (scratch project, private tmux socket, one handoff
+  page carrying a probe token). The resumed process got a new runtime record: startedAt
+  07:24:40.972Z, after the wiring stamp 07:24:08Z, with the same session id. Its `/clear` ran
+  `SessionStart:clear` and the token was in the fresh transcript. The resume path holds.
+  — CONTROL, and it contradicts D1's premise: the original process had started with NO reload
+  hook in `.claude/settings.json`. The hook was added while it ran, and a `/clear` 3 s later
+  already ran it and reloaded the page. On 2.1.331, a running session picks up a hook added to
+  project settings, so a session that started before the wiring is not necessarily without it.
+  Whether the start filter is still needed is an open decision; this probe does not settle it.
 
 ## 2. Executor
 

@@ -98,8 +98,9 @@ it you use the defaults and SAY so.
    from the statusline or the newest `~/.claude/sessions/<pid>.json`). Present ⇒ this session
    started before the filter: name it in this turn and give the resume command from the file's
    line 1 (`claude --resume <id>` — same session id, new process, current hooks), then let the
-   user resume it. The resume path is not measured yet — task 1.1 of started-after-self-exclusion;
-   verify the resumed session reloads after a `/clear` before relying on it. Do not expect a clear
+   user resume it. The resume path is measured (task 1.1 of started-after-self-exclusion, 2026-11-24,
+   Claude Code 2.1.331): the resumed process gets a new runtime record after the stamp, and its
+   `/clear` reloads the handoff. Do not expect a clear
    or a nudge to reach the excluded session: it is never typed into.
 
 ### macOS
