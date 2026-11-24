@@ -517,3 +517,10 @@ test("21:26:17Z: the fire lock holds a second fire while the clear is in flight,
   assert.equal(fireLockState("garbage", "ca523297", NOW), "free", "an unreadable lock never blocks — but nothing was proven either")
   assert.equal(fireLockState(lock, "", NOW), "held", "no id to verify against: hold rather than double-fire")
 })
+
+test("shapeOf keeps the escapes and replaces visible text by its length — the 2026-11-24 34-min 'typed' left no record of what was read", async () => {
+  const { shapeOf } = await import("../templates/presence.mjs")
+  assert.equal(shapeOf("\x1b[7mh\x1b[27mello world"), "\\e[7m‹1›\\e[27m‹10›")
+  assert.equal(shapeOf("\x1b]0;title\x07\x1b(B\x0fab"), "\\e]…\\e(B\\x0f‹2›")
+  assert.doesNotMatch(shapeOf("my password is hunter2"), /hunter2|password/)
+})

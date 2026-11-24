@@ -100,3 +100,11 @@ test("a watcher whose gate dir lacks handoff-cost.mjs says so once at startup �
   const r = runWatcher({ tokens: 100_000, seconds: 2, gateDirWithoutCost: true })
   assert.match(r.log, /note  handoff-cost\.mjs not installed next to the gate — no cost\/payback lines/, r.log)
 })
+
+test("a presence=typed hold logs the SHAPE of what it saw and never the text — measured 2026-11-24 on a fleet seat: 34 min of 'typed' with nobody typing, and no record of what the check had read", () => {
+  // "secret draft" in the input row: the log must show its length, never the words.
+  const r = runWatcher({ tokens: 250_000, idleMin: 49, marker: true, seconds: 3, screen: "\\xe2\\x9d\\xaf\\xc2\\xa0secret draft\\n" })
+  assert.deepEqual(r.keys, [], r.log)
+  assert.match(r.log, /ELIGIBLE but presence=typed\[paint ‹12›\]/, r.log)
+  assert.doesNotMatch(r.log, /secret|draft/, "a human's unsent words never reach the log")
+})
