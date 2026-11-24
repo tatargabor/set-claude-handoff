@@ -564,10 +564,12 @@ cost_log() { # $1 = tree, $2 = cleared sid, $3 = its transcript, $4 = pid
   m="$1/.set/handoff/.written-$s8"
   [ -f "$m" ] && [ -f "$3" ] || { log "cost  $2  not measured: no marker or transcript to read"; return 0; }
   mtime=$(node -e 'process.stdout.write(String(Math.round(require("node:fs").statSync(process.argv[1]).mtimeMs)))' "$m" 2>/dev/null)
-  j=$(node "$COST" cost "$3" "$mtime" 2>/dev/null)
+  # The handoff's own name lets a self-written handoff be counted from its first write, not from
+  # the start of the work turn it ended (measured 2026-11-24: 90 work requests logged as the handoff).
+  j=$(node "$COST" cost "$3" "$mtime" "$(date +%s%3N)" "$(awk '{print $2; exit}' "$m" 2>/dev/null)" 2>/dev/null)
   eq=$(printf '%s' "$j" | jq -r '.equiv // empty' 2>/dev/null)
   [ -n "$eq" ] || { log "cost  $2  not measured: $(printf '%s' "$j" | jq -r '.error // "no usage records"' 2>/dev/null)"; return 0; }
-  log "cost  $2  handoff turn: $(printf '%s' "$j" | jq -r '"\(.requests) requests, cache write \(.cacheWrite), cache read \(.cacheRead), output \(.output)"') ≈ $eq input-token equivalents; context before $(printf '%s' "$j" | jq -r '.contextBefore // "unknown"') (trigger=${trigger:-?})"
+  log "cost  $2  handoff $(printf '%s' "$j" | jq -r 'if .scope == "self-written" then "self-written (from its first write)" else "turn" end'): $(printf '%s' "$j" | jq -r '"\(.requests) requests, cache write \(.cacheWrite), cache read \(.cacheRead), output \(.output)"') ≈ $eq input-token equivalents; context before $(printf '%s' "$j" | jq -r '.contextBefore // "unknown"') (trigger=${trigger:-?})"
   printf '%s %s %s %s\n' "$4" "$(printf '%s' "$j" | jq -r '.contextBefore // 0')" "$eq" "$(date +%s)" > "$1/.set/handoff/.cost-$s8" 2>/dev/null
 }
 payback_check() { # every pass: a recorded clear whose fresh session has made PAYBACK_REQUESTS requests

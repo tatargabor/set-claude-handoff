@@ -32,3 +32,29 @@ test("payback waits for n requests, then prices the smaller context's cache read
   assert.deepEqual(payback(fresh(5), 300_000, 20), { requests: 5 })
   assert.deepEqual(payback(fresh(25), 300_000, 20), { requests: 20, avgContext: 30_000, savedEquiv: 540_000 })
 })
+
+const tool = (id, s, u, name, input) => JSON.stringify({ type: "assistant", timestamp: at(s), message: { id, usage: u, content: [{ type: "tool_use", name, input }] } })
+
+test("a handoff the session wrote itself at the end of a work turn is counted from its first write, not from the turn's start — measured 2026-11-24 on a fleet seat: 90 work requests (3.67M) were logged as the handoff turn", () => {
+  const NAME = "1123-6ee6--some-thread.md"
+  const work = { input_tokens: 0, cache_read_input_tokens: 300_000, cache_creation_input_tokens: 1000, output_tokens: 500 }
+  const lines = [
+    user(0, "/home/user/paste/abc.png do the work"),
+    tool("w1", 10, work, "Read", { file_path: `/tree/.set/handoff/${NAME}` }), // reading it is not writing it
+    tool("w2", 20, work, "Bash", { command: `grep x /tree/.set/handoff/auto-clear.log` }),
+    asst("w3", 30, { ...work, cache_read_input_tokens: 336_000 }),
+    tool("h1", 40, work, "Edit", { file_path: `/tree/.set/handoff/${NAME}`, old_string: "a", new_string: "b" }),
+    asst("h2", 50, work),
+  ].join("\n")
+  const c = handoffCost(lines, T0 + 60_000, T0 + 120_000, NAME)
+  assert.equal(c.requests, 2, JSON.stringify(c))
+  assert.equal(c.scope, "self-written")
+  assert.equal(c.since, at(40))
+  assert.equal(c.contextBefore, 337_000, "the context just before the handoff write, which the clear removed")
+  // Without the name the old boundary holds, and a /handoff-opened turn is never narrowed.
+  assert.equal(handoffCost(lines, T0 + 60_000, T0 + 120_000).requests, 5)
+  const nudged = [user(0, "<command-name>/handoff</command-name>"), tool("r", 10, work, "Read", { file_path: "x" }), tool("e", 20, work, "Write", { file_path: `/t/.set/handoff/${NAME}` })].join("\n")
+  const n = handoffCost(nudged, T0 + 30_000, T0 + 60_000, NAME)
+  assert.equal(n.requests, 2)
+  assert.equal(n.scope, "turn")
+})
