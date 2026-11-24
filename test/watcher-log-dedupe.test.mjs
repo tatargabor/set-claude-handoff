@@ -99,3 +99,9 @@ test("a watcher whose python3 cannot import the fleet owner client says so at st
   assert.match(r.log, /warn  fleet: the owner client is not importable by \S+ \(ModuleNotFoundError: No module named 'set_orch'\)/, r.log)
   assert.match(r.log, /no writer path; the fleet owner client is NOT importable/, r.log)
 })
+
+test("the watcher finds set-core's lib through set-core's own binary on PATH — no machine-specific PYTHONPATH in the unit, so a second machine with another install path works too (36 of 41 units lacked that line on 2026-11-24)", () => {
+  const r = runWatcher({ tokens: 100_000, seconds: 2, fleetViaBin: true, extraArgs: [], mutate: null })
+  assert.match(r.log, /fleet: owner client found via set-agent-owner \(\S+fake-set-core\/lib\), added to PYTHONPATH/, r.log)
+  assert.doesNotMatch(r.log, /warn  fleet/, r.log)
+})

@@ -3,7 +3,7 @@
 // that is given. A fake `tmux` on PATH hosts the session pid, renders `screen` (an empty idle prompt by
 // default), and appends every send-keys call to keys.log. The watcher then runs for a few one-second
 // passes. Shared by the watcher-level tests, so a new trigger reuses the harness instead of copying it.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync } from "node:fs"
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, utimesSync, symlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -19,7 +19,7 @@ export const IDLE_SCREEN = "\\xe2\\x9d\\xaf\\xc2\\xa0\\n"                       
 export const WORKING_SCREEN = "\\xe2\\x9c\\xbb Wibbling\\xe2\\x80\\xa6 \\n" + IDLE_SCREEN
 
 export function runWatcher({ tokens, idleMin = null, marker = false, markerAgeMin = null, nudgeRecord = null, nudgeRecordAgeMin = null,
-  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false, noPane = false, noFleetClient = false,
+  screen = IDLE_SCREEN, extraArgs = [], seconds = 5, mutate = null, prefillLogBytes = 0, staleLog1 = false, watcherTmpUnwritable = false, termWatcherOnly = false, noPane = false, noFleetClient = false, fleetViaBin = false,
   startedAtMin = 120, wiredAtMin = null, wiredStamp = null, excluded = null }) {
   const base = mkdtempSync(join(tmpdir(), "watch-harness-"))
   const home = join(base, "home"), proj = join(base, "proj"), bin = join(base, "bin")
@@ -73,10 +73,21 @@ exit 0
   chmodSync(join(bin, "tmux"), 0o755)
   // noFleetClient: a python3 that cannot import set_orch (a unit without set-core's lib on
   // PYTHONPATH); every other python3 call goes to the real interpreter.
-  if (noFleetClient) {
+  // fleetViaBin: a fake set-core checkout whose bin/set-agent-owner is symlinked onto PATH; the
+  // fake python3 imports set_orch only once that checkout's lib is on PYTHONPATH.
+  const fakeCore = join(base, "fake-set-core")
+  if (fleetViaBin) {
+    for (const d of [join(fakeCore, "bin"), join(fakeCore, "lib/set_orch")]) mkdirSync(d, { recursive: true })
+    writeFileSync(join(fakeCore, "bin/set-agent-owner"), "#!/usr/bin/env bash\nexit 0\n")
+    chmodSync(join(fakeCore, "bin/set-agent-owner"), 0o755)
+    symlinkSync(join(fakeCore, "bin/set-agent-owner"), join(bin, "set-agent-owner"))
+  }
+  if (noFleetClient || fleetViaBin) {
     const real = spawnSync("bash", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim()
     writeFileSync(join(bin, "python3"), `#!/usr/bin/env bash
-case "$*" in *set_orch*) echo "ModuleNotFoundError: No module named 'set_orch'" >&2; exit 1;; esac
+case "$*" in *set_orch*)
+  case ":$PYTHONPATH:" in *":${fakeCore}/lib:"*) ${fleetViaBin ? "exit 0" : ":"};; esac
+  echo "ModuleNotFoundError: No module named 'set_orch'" >&2; exit 1;; esac
 exec ${real} "$@"
 `)
     chmodSync(join(bin, "python3"), 0o755)
