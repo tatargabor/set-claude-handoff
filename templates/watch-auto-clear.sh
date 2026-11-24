@@ -659,15 +659,19 @@ verify_submitted() { # $1 = pid, $2 = fragment expected in a USER entry of the f
   [ -f "$t" ] && node "$TURN" submitted "$t" "$2" 2>/dev/null
 }
 
-continue_finish() { # $1 = pid, $2 = where (log label), $3.. = how to press Enter again
-  local pid="$1" where="$2" try
-  shift 2
+continue_finish() { # $1 = pid, $2 = where (log label), $3 = the text typed, $4.. = how to press Enter again
+  local pid="$1" where="$2" typed_text="$3" try
+  shift 3
   # The fragment comes from the prompt ACTUALLY typed. The fixed "auto-continue" default could
   # never match a custom --auto-continue prompt (measured 2026-09-21 on a consumer seat: a
   # prompt with no such word, a whole-file grep that matched the reinjected handoff instead,
   # a false "confirmed", no Enter retry — the prompt sat unsent until a human pressed Enter).
   # Cut before any quote or backslash: the transcript line is JSON and escapes those.
-  local fragment="${CONTINUE_FRAGMENT:-${CONTINUE_PROMPT:0:40}}"
+  # And from the text typed THIS time, not $CONTINUE_PROMPT: after a warm-idle clear the idle
+  # prompt is typed, so the working prompt's fragment never matched — measured 2026-11-24
+  # 12:46:56Z on a fleet seat: submitted and answered, yet UNCONFIRMED, and two more Enters were
+  # pressed into a session already answering (one could land on an open question dialog).
+  local fragment="${CONTINUE_FRAGMENT:-${typed_text:0:40}}"
   fragment="${fragment%%[\"\\]*}"
   [ -n "$fragment" ] || fragment="auto-continue"
   for try in 1 2 3; do
@@ -714,7 +718,7 @@ continue_tmux() { # $1 = pane, $2 = pid, $3 = cleared sid, $4 = tree
   sleep 1.5
   tmux send-keys -t "$1" Enter
   log "CONTINUE sent  auto-continue prompt → pane $1"
-  continue_finish "$2" "pane $1" tmux send-keys -t "$1" Enter
+  continue_finish "$2" "pane $1" "$text" tmux send-keys -t "$1" Enter
 }
 continue_owner() { # $1 = fleet label, $2 = pid, $3 = cleared sid, $4 = tree
   [ -n "$CONTINUE_PROMPT" ] || return 0
@@ -729,7 +733,7 @@ continue_owner() { # $1 = fleet label, $2 = pid, $3 = cleared sid, $4 = tree
   sleep 1.5
   fleet_owner_enter "$1"
   log "CONTINUE sent  auto-continue prompt → fleet agent $1"
-  continue_finish "$2" "fleet agent $1" fleet_owner_enter "$1"
+  continue_finish "$2" "fleet agent $1" "$text" fleet_owner_enter "$1"
 }
 
 # After a /compact the session id stays, so the clear path's fresh-session gate does not apply: wait

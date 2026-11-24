@@ -66,6 +66,18 @@ test("after a warm-idle clear the auto-continue opens with WAITING FOR THE USER 
   assert.doesNotMatch(typed, /Continue with its CURRENT next step/, "not the working-session continue")
 })
 
+test("a warm-idle continue that WAS submitted is confirmed on the first try and gets no extra Enter — measured 2026-11-24 12:46:56Z on a fleet seat: the check looked for the working-continue text, logged UNCONFIRMED and pressed Enter twice more into a session already answering", () => {
+  // The fresh transcript carries the idle prompt as a user string entry, as the real one did.
+  const mutate = `sleep 1.5; f="$TMPDIR/home/.claude/sessions/424242.json"; jq '.sessionId="cafebabe-0000-1111-2222-333344445555"' "$f" > "$f.t" && mv "$f.t" "$f"
+printf '{"type":"user","message":{"role":"user","content":"WAITING FOR THE USER - this session was cleared after an idle wait (warm-idle)"}}\\n' >> "$TDIR/cafebabe-0000-1111-2222-333344445555.jsonl"`
+  const r = runWatcher({ tokens: 250_000, idleMin: 49, marker: true, seconds: 16, mutate, extraArgs: ["--auto-continue", "default", "--continue-delay", "1"] })
+  const typedAt = r.keys.findIndex((k) => k.startsWith("-t fake:0.0 -l WAITING FOR THE USER"))
+  assert.ok(typedAt >= 0, `the idle continue was typed:\n${JSON.stringify(r.keys)}\n${r.log}`)
+  assert.deepEqual(r.keys.slice(typedAt + 1), ["-t fake:0.0 Enter"], `one Enter after the prompt, no retry:\n${JSON.stringify(r.keys)}\n${r.log}`)
+  assert.match(r.log, /CONTINUE confirmed  prompt submitted \(try 1\)/, r.log)
+  assert.doesNotMatch(r.log, /CONTINUE UNCONFIRMED/, r.log)
+})
+
 test("a SIZE clear keeps the working-session continue — only a warm-idle clear means the session was waiting for the user", () => {
   const mutate = `sleep 1.5; f="$TMPDIR/home/.claude/sessions/424242.json"; jq '.sessionId="cafebabe-0000-1111-2222-333344445555"' "$f" > "$f.t" && mv "$f.t" "$f"`
   const r = runWatcher({ tokens: 410_000, marker: true, seconds: 6, mutate, extraArgs: ["--auto-continue", "default", "--continue-delay", "1"] })
