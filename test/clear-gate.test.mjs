@@ -76,6 +76,39 @@ test("a tool call left without its result must block — mid-turn is not idle", 
   assert.equal(res.gates.find((g) => g.name === "idle").ok, false, "unanswered user message = mid-turn")
 })
 
+test("an interrupted turn is idle — B-252, measured 2026-11-27: the runtime's '[Request interrupted by user]' text block read as an unanswered message and held a 421k consumer session's armed clear shut for ever", () => {
+  const dir = tmp()
+  const idleOf = (records) => {
+    const tr = join(dir, "t.jsonl")
+    writeFileSync(tr, records.map((r) => JSON.stringify(r)).join("\n") + "\n")
+    return evaluate({ dir, sessionId: "aaaaaaaa-1111", threshold: 1, transcriptPath: tr, backgroundWorkBlocks: false })
+      .gates.find((g) => g.name === "idle")
+  }
+  const prompt = { type: "user", message: { role: "user", content: [{ type: "text", text: "fix it" }] } }
+  const working = { type: "assistant", message: { content: [{ type: "text", text: "Looking." }] } }
+  const interrupt = { type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user]" }] } }
+  assert.equal(idleOf([prompt, working, interrupt]).ok, true, "a plain interrupt ends the turn")
+
+  // Esc on a permission prompt: the rejection tool_result and the marker (with its trailing newline).
+  const toolUse = { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] } }
+  const rejected = { type: "user", message: { role: "user", content: [
+    { type: "tool_result", tool_use_id: "t1", is_error: true, content: "The user doesn't want to proceed with this tool use." },
+    { type: "text", text: "[Request interrupted by user for tool use]\n" }] } }
+  assert.equal(idleOf([prompt, toolUse, rejected]).ok, true, "an interrupt on a tool call ends the turn")
+
+  // An interrupt mid-tool with no result written: the cut-off call will never be answered.
+  const cutOff = { type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } }
+  assert.equal(idleOf([prompt, toolUse, cutOff]).ok, true, "the interrupt abandons a pending tool call")
+
+  // What must still block: a real prompt typed after the interrupt, and a prompt that only quotes the marker.
+  const next = { type: "user", message: { role: "user", content: [{ type: "text", text: "no, do the other one" }] } }
+  assert.match(idleOf([prompt, working, interrupt, next]).detail, /user message awaiting response/)
+  const quoting = { type: "user", message: { role: "user", content: [{ type: "text", text: "why did I get [Request interrupted by user]?" }] } }
+  assert.equal(idleOf([prompt, working, quoting]).ok, false, "only the exact marker counts, not a prompt containing it")
+  // A tool call issued after the interrupt is pending again.
+  assert.equal(idleOf([prompt, working, interrupt, next, toolUse]).ok, false)
+})
+
 test("all gates hold → eligible — the one path that may ever fire", () => {
   const dir = tmp()
   const tr = join(dir, "t.jsonl")
